@@ -7,99 +7,152 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: android-qa-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  emulator-smoke:
+  source-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Product contract QA
+        run: node qa/contracts.mjs
+
+      - name: Reconstruct Fight AI 0.13 source
+        run: |
+          set -euo pipefail
+          mkdir -p qa/full-source
+          cat bootstrap/source/full-*.b64 > /tmp/fightai.b64
+          base64 -d /tmp/fightai.b64 > /tmp/fightai.tar.gz
+          echo "d7bc4125b57dce497c8c0bce66180fd2a7d3576fb3ef08217159fa4adf62e6f4  /tmp/fightai.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/fightai.tar.gz -C qa/full-source
+          test -f qa/full-source/App.tsx
+          test -f qa/full-source/vision_server/server.py
+          test -f qa/full-source/src/engine/combatEngine.ts
+
+      - name: Static source checks
+        working-directory: qa/full-source
+        run: |
+          npm install --legacy-peer-deps
+          npx tsc --noEmit
+          python -m compileall -q vision_server
+
+      - name: Product regression tests
+        working-directory: qa/full-source
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pytest -q vision_server/test_013_product_qa.py
+
+      - name: Generate and validate motion demos
+        working-directory: qa/full-source
+        run: |
+          pip install "numpy>=2,<3" opencv-python-headless
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools_make_visuals.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace("OUT=Path('/mnt/data/fight-ai-mobile-beta-0.13.0/assets/techniques')", "OUT=Path('assets/techniques')")
+          s=s.replace("W,H=640,360; FPS=24; DUR=4.5; N=int(FPS*DUR)", "W,H=640,360; FPS=24; DUR=4.5; N=int(FPS*DUR)\nOUT.mkdir(parents=True,exist_ok=True)")
+          p.write_text(s,encoding='utf-8')
+          PY
+          python tools_make_visuals.py
+          test $(find assets/techniques -name '*.mp4' | wc -l) -eq 6
+          python - <<'PY'
+          import cv2,glob,sys
+          bad=[]
+          for p in glob.glob('assets/techniques/*.mp4'):
+              c=cv2.VideoCapture(p)
+              n=int(c.get(cv2.CAP_PROP_FRAME_COUNT))
+              fps=c.get(cv2.CAP_PROP_FPS)
+              frames=[]
+              for idx in (0,max(0,n//2),max(0,n-2)):
+                  c.set(cv2.CAP_PROP_POS_FRAMES,idx)
+                  ok,f=c.read()
+                  if ok: frames.append(f)
+              c.release()
+              moving=len(frames)>=2 and any(abs(frames[i].astype('int16')-frames[i-1].astype('int16')).mean()>0.25 for i in range(1,len(frames)))
+              if n < 60 or fps < 20 or not moving: bad.append((p,n,fps,moving))
+          if bad:
+              print('BAD MOTION DEMOS',bad)
+              sys.exit(1)
+          print('[PASS] 6 motion demos contain real frame-to-frame movement')
+          PY
+
+      - name: Upload source QA report inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fight-ai-source-qa
+          path: |
+            qa/full-source/QA_REPORT_0_13_0.md
+            qa/full-source/BETA_0_13_0.md
+
+  real-app-build:
+    needs: source-validation
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
 
-      - name: Product contract QA
-        run: node qa/contracts.mjs
-
-      - name: Create QA native app
+      - name: Reconstruct Fight AI source
         run: |
-          mkdir -p qa/native/app/src/main/java/com/fightai/qaharness
-          cat > qa/native/settings.gradle <<'EOF'
-          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
-          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
-          rootProject.name='FightAiQaHarness'
-          include ':app'
-          EOF
-          cat > qa/native/build.gradle <<'EOF'
-          plugins { id 'com.android.application' version '8.7.3' apply false }
-          EOF
-          cat > qa/native/app/build.gradle <<'EOF'
-          plugins { id 'com.android.application' }
-          android {
-            namespace 'com.fightai.qaharness'
-            compileSdk 35
-            defaultConfig {
-              applicationId 'com.fightai.qaharness'
-              minSdk 24
-              targetSdk 35
-              versionCode 1
-              versionName '1.0'
-            }
-          }
-          EOF
-          mkdir -p qa/native/app/src/main/res/values
-          cat > qa/native/app/src/main/AndroidManifest.xml <<'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <application android:theme="@style/AppTheme" android:label="Fight AI QA">
-              <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
-                <intent-filter>
-                  <action android:name="android.intent.action.MAIN"/>
-                  <category android:name="android.intent.category.LAUNCHER"/>
-                </intent-filter>
-              </activity>
-            </application>
-          </manifest>
-          EOF
-          cat > qa/native/app/src/main/res/values/styles.xml <<'EOF'
-          <resources>
-            <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
-              <item name="android:fontFamily">sans</item>
-              <item name="android:colorAccent">#ef3f42</item>
-              <item name="android:navigationBarColor">#0b0d10</item>
-              <item name="android:statusBarColor">#0b0d10</item>
-            </style>
-          </resources>
-          EOF
-          cat > qa/native/app/src/main/java/com/fightai/qaharness/MainActivity.java <<'EOF'
-          package com.fightai.qaharness;
-          import android.app.Activity;
-          import android.os.Bundle;
-          import android.graphics.Color;
-          import android.view.Gravity;
-          import android.widget.LinearLayout;
-          import android.widget.TextView;
-          public class MainActivity extends Activity {
-            public void onCreate(Bundle b) {
-              super.onCreate(b);
-              LinearLayout l=new LinearLayout(this);
-              l.setOrientation(LinearLayout.VERTICAL); l.setGravity(Gravity.CENTER);
-              l.setPadding(48,48,48,48); l.setBackgroundColor(Color.rgb(11,13,16));
-              TextView t=new TextView(this); t.setText("FIGHT AI\nANDROID CLOUD QA\nREADY");
-              t.setTextColor(Color.WHITE); t.setTextSize(28); t.setGravity(Gravity.CENTER);
-              l.addView(t); setContentView(l);
-            }
-          }
-          EOF
-          cd qa/native
-          gradle wrapper --gradle-version 8.9
-          ./gradlew assembleDebug
+          mkdir -p qa/full-source
+          cat bootstrap/source/full-*.b64 > /tmp/fightai.b64
+          base64 -d /tmp/fightai.b64 > /tmp/fightai.tar.gz
+          echo "d7bc4125b57dce497c8c0bce66180fd2a7d3576fb3ef08217159fa4adf62e6f4  /tmp/fightai.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/fightai.tar.gz -C qa/full-source
 
-      - name: Run Android 35 emulator QA
+      - name: Generate visual assets
+        working-directory: qa/full-source
+        run: |
+          python -m pip install "numpy>=2,<3" opencv-python-headless
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools_make_visuals.py')
+          s=p.read_text(encoding='utf-8')
+          s=s.replace("OUT=Path('/mnt/data/fight-ai-mobile-beta-0.13.0/assets/techniques')", "OUT=Path('assets/techniques')")
+          s=s.replace("W,H=640,360; FPS=24; DUR=4.5; N=int(FPS*DUR)", "W,H=640,360; FPS=24; DUR=4.5; N=int(FPS*DUR)\nOUT.mkdir(parents=True,exist_ok=True)")
+          p.write_text(s,encoding='utf-8')
+          PY
+          python tools_make_visuals.py
+
+      - name: Build real Expo Android APK
+        working-directory: qa/full-source
+        env:
+          EXPO_PUBLIC_VISION_API_URL: http://10.0.2.2:8787
+        run: |
+          npm install --legacy-peer-deps
+          npx expo prebuild --platform android --no-install
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Run real Fight AI app on Android 35
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -107,21 +160,25 @@ jobs:
           profile: pixel_7
           disable-animations: false
           script: |
+            set -euo pipefail
             mkdir -p qa-artifacts
-            adb install -r qa/native/app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -W -n com.fightai.qaharness/.MainActivity | tee qa-artifacts/activity-start.txt
-            sleep 3
-            adb shell uiautomator dump /sdcard/window.xml
-            adb pull /sdcard/window.xml qa-artifacts/window.xml
-            adb exec-out screencap -p > qa-artifacts/screenshot.png
+            APK=qa/full-source/android/app/build/outputs/apk/debug/app-debug.apk
+            test -f "$APK"
+            adb install -r "$APK"
+            adb shell monkey -p com.fightai.sparringanalyst -c android.intent.category.LAUNCHER 1
+            sleep 5
+            adb shell uiautomator dump /sdcard/fightai.xml
+            adb pull /sdcard/fightai.xml qa-artifacts/fightai.xml
+            adb exec-out screencap -p > qa-artifacts/fightai-home.png
             adb logcat -d > qa-artifacts/logcat.txt
-            grep -q "ANDROID CLOUD QA" qa-artifacts/window.xml
+            grep -q "AI Sparring Analyst\|Fight AI\|Beta" qa-artifacts/fightai.xml
+            ! grep -E "FATAL EXCEPTION|AndroidRuntime.*FATAL" qa-artifacts/logcat.txt
 
-      - name: Upload QA artifacts
+      - name: Upload real Android QA artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-cloud-qa
+          name: fight-ai-real-android-qa
           path: |
             qa-artifacts/
-            qa/native/app/build/outputs/apk/debug/app-debug.apk
+            qa/full-source/android/app/build/outputs/apk/debug/app-debug.apk
