@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [qa/cloud-android]
+  pull_request:
+    branches: [main]
 
 jobs:
   emulator-smoke:
@@ -31,9 +33,7 @@ jobs:
           include ':app'
           EOF
           cat > qa/native/build.gradle <<'EOF'
-          plugins {
-            id 'com.android.application' version '8.7.3' apply false
-          }
+          plugins { id 'com.android.application' version '8.7.3' apply false }
           EOF
           cat > qa/native/app/build.gradle <<'EOF'
           plugins { id 'com.android.application' }
@@ -49,6 +49,7 @@ jobs:
             }
           }
           EOF
+          mkdir -p qa/native/app/src/main/res/values
           cat > qa/native/app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <application android:theme="@style/AppTheme" android:label="Fight AI QA">
@@ -61,7 +62,6 @@ jobs:
             </application>
           </manifest>
           EOF
-          mkdir -p qa/native/app/src/main/res/values
           cat > qa/native/app/src/main/res/values/styles.xml <<'EOF'
           <resources>
             <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
