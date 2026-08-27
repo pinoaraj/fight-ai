@@ -1,0 +1,124 @@
+name: Android Cloud QA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [qa/cloud-android]
+
+jobs:
+  emulator-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create QA native app
+        run: |
+          mkdir -p qa/native/app/src/main/java/com/fightai/qaharness
+          cat > qa/native/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name='FightAiQaHarness'
+          include ':app'
+          EOF
+          cat > qa/native/build.gradle <<'EOF'
+          plugins {
+            id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+          cat > qa/native/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+            namespace 'com.fightai.qaharness'
+            compileSdk 35
+            defaultConfig {
+              applicationId 'com.fightai.qaharness'
+              minSdk 24
+              targetSdk 35
+              versionCode 1
+              versionName '1.0'
+            }
+          }
+          EOF
+          cat > qa/native/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application android:theme="@style/AppTheme" android:label="Fight AI QA">
+              <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN"/>
+                  <category android:name="android.intent.category.LAUNCHER"/>
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+          mkdir -p qa/native/app/src/main/res/values
+          cat > qa/native/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+            <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+              <item name="android:fontFamily">sans</item>
+              <item name="android:colorAccent">#ef3f42</item>
+              <item name="android:navigationBarColor">#0b0d10</item>
+              <item name="android:statusBarColor">#0b0d10</item>
+            </style>
+          </resources>
+          EOF
+          cat > qa/native/app/src/main/java/com/fightai/qaharness/MainActivity.java <<'EOF'
+          package com.fightai.qaharness;
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.graphics.Color;
+          import android.view.Gravity;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          public class MainActivity extends Activity {
+            public void onCreate(Bundle b) {
+              super.onCreate(b);
+              LinearLayout l=new LinearLayout(this);
+              l.setOrientation(LinearLayout.VERTICAL); l.setGravity(Gravity.CENTER);
+              l.setPadding(48,48,48,48); l.setBackgroundColor(Color.rgb(11,13,16));
+              TextView t=new TextView(this); t.setText("FIGHT AI\nANDROID CLOUD QA\nREADY");
+              t.setTextColor(Color.WHITE); t.setTextSize(28); t.setGravity(Gravity.CENTER);
+              l.addView(t); setContentView(l);
+            }
+          }
+          EOF
+          cd qa/native
+          gradle wrapper --gradle-version 8.9
+          ./gradlew assembleDebug
+
+      - name: Run Android 35 emulator QA
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          script: |
+            mkdir -p qa-artifacts
+            adb install -r qa/native/app/build/outputs/apk/debug/app-debug.apk
+            adb shell am start -W -n com.fightai.qaharness/.MainActivity | tee qa-artifacts/activity-start.txt
+            sleep 3
+            adb shell uiautomator dump /sdcard/window.xml
+            adb pull /sdcard/window.xml qa-artifacts/window.xml
+            adb exec-out screencap -p > qa-artifacts/screenshot.png
+            adb logcat -d > qa-artifacts/logcat.txt
+            grep -q "ANDROID CLOUD QA" qa-artifacts/window.xml
+
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-cloud-qa
+          path: |
+            qa-artifacts/
+            qa/native/app/build/outputs/apk/debug/app-debug.apk
