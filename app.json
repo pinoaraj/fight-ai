@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "AI Sparring Analyst Beta",
+    "slug": "ai-sparring-analyst-beta",
+    "version": "0.13.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "platforms": ["android","ios"],
+    "android": {"package": "com.fightai.sparringanalyst","versionCode": 14},
+    "ios": {"bundleIdentifier": "com.fightai.sparringanalyst","buildNumber": "14","supportsTablet": false},
+    "plugins": ["expo-document-picker"]
+  }
+}
