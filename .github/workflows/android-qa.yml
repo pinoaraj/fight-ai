@@ -23,6 +23,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Product contract QA
+        run: node qa/contracts.mjs
+
       - name: Create QA native app
         run: |
           mkdir -p qa/native/app/src/main/java/com/fightai/qaharness
