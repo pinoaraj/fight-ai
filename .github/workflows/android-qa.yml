@@ -165,14 +165,8 @@ jobs:
             APK=qa/full-source/android/app/build/outputs/apk/debug/app-debug.apk
             test -f "$APK"
             adb install -r "$APK"
-            adb shell monkey -p com.fightai.sparringanalyst -c android.intent.category.LAUNCHER 1
-            sleep 5
-            adb shell uiautomator dump /sdcard/fightai.xml
-            adb pull /sdcard/fightai.xml qa-artifacts/fightai.xml
-            adb exec-out screencap -p > qa-artifacts/fightai-home.png
-            adb logcat -d > qa-artifacts/logcat.txt
-            grep -q "AI Sparring Analyst\|Fight AI\|Beta" qa-artifacts/fightai.xml
-            ! grep -E "FATAL EXCEPTION|AndroidRuntime.*FATAL" qa-artifacts/logcat.txt
+            chmod +x qa/android_virtual_agent.sh
+            qa/android_virtual_agent.sh qa-artifacts
 
       - name: Upload real Android QA artifacts
         if: always()
