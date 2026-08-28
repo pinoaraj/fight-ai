@@ -5,15 +5,33 @@ _Last updated: 2026-08-28_
 ## 1. Product goal
 Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide concise coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
 
+### Core coaching premise — clinical eye, not generic commentary
+Fight AI must analyze sparring as closely as possible to how an experienced combat-sports coach reviews a round. The engine should not merely label isolated mistakes; it should connect visible actions into recurring technical and tactical patterns, explain why those patterns matter in the matchup, identify what the opponent is exploiting or vulnerable to, and convert the highest-value findings into specific corrections, game-plan adjustments and drills.
+
+The expected reasoning pattern for every report is:
+- observe what actually happened on video;
+- distinguish one-off moments from recurring patterns;
+- infer the technical/tactical cause only when evidence supports it;
+- prioritize the 2–3 issues that would most change performance rather than flooding the athlete with minor notes;
+- identify strengths that can be deliberately built into the game plan;
+- analyze opponent habits, preferred range, reactions and exploitable tendencies;
+- explain what to do differently, when to do it and why;
+- attach timestamp evidence and correction guidance;
+- turn corrections into drills and visual teaching aids tied to the detected mistake;
+- clearly label tactical hypotheses when certainty is lower.
+
+A Fight AI report should feel like a real post-sparring coach review: concise, specific, contextual and actionable. Generic advice such as “keep your hands up” or “move your feet more” is insufficient unless the report explains the exact recurring context, consequence and correction visible in the footage.
+
 ## 2. Shared analysis contract
 Every client consumes the same logical report schema:
 - target fighter identity + confidence
 - provider status and `usedInReport`
-- summary
+- summary / main takeaway
 - strengths
 - technical priorities
 - opponent patterns
-- tactical plan
+- tactical/rematch plan
+- next-session goals
 - drills
 - timestamped evidence with confidence, observation, why-it-matters and correction
 
@@ -60,7 +78,7 @@ Preferred production path remains the shared Fight AI analysis backend via `FIGH
 
 If the shared backend is absent, the web server may use authenticated Gemini directly as a temporary analysis fallback. The browser never receives the Gemini key. The server uploads the selected video to Gemini Files API, waits for ACTIVE state, requests structured Spanish coaching JSON, and marks `provider: Gemini` + `usedInReport: true` only after a successful authenticated response and valid JSON parse.
 
-The fallback prompt forbids invented exact punch counts and asks for visible evidence, tactical hypotheses, at most three main priorities, actionable drills and timestamps only when supported.
+The Gemini/video-AI prompt and post-processing must enforce the clinical-coach premise above: visible facts first, recurring-pattern detection, matchup context, opponent habits, prioritized corrections, actionable drills and timestamp support. It must forbid invented exact punch counts and unsupported certainty.
 
 For production-scale sparring uploads, the web path must not depend on holding a single synchronous HTTP request open while loading the entire file into Next.js memory. Large-video ingestion must move to an asynchronous/private upload path with explicit processing state and recoverable job status.
 
@@ -81,6 +99,7 @@ Detected mistakes should link to correction visuals. Product direction supports 
 ## 9. QA matrix
 Before release, validate together:
 - Android↔Web feature-parity checklist
+- clinical-coach report quality: recurring patterns, matchup context and prioritized corrections rather than generic advice
 - video upload/playback
 - target fighter selection after upload
 - visual fighter identity/re-identification persistence
