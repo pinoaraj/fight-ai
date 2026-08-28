@@ -58,8 +58,20 @@ export default function Home() {
       if (fighter === 'Guantes rojos') body.append('glove_color', 'red');
       if (fighter === 'Guantes azules') body.append('glove_color', 'blue');
       const response = await fetch('/api/analyze', { method: 'POST', body });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'No se pudo ejecutar el análisis.');
+      const raw = await response.text();
+      let data: Report | { error?: string } | null = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+
+      if (!response.ok) {
+        const serverMessage = data && 'error' in data && typeof data.error === 'string' ? data.error : '';
+        const contentType = response.headers.get('content-type') || '';
+        const upstreamHtml = contentType.includes('text/html') || raw.trim().startsWith('<');
+        if (serverMessage) throw new Error(serverMessage);
+        if (upstreamHtml) throw new Error(`El servidor interrumpió el análisis (HTTP ${response.status}). El video pudo exceder el tiempo o recursos disponibles. Fight AI registró este fallo para corrección.`);
+        throw new Error(`No se pudo ejecutar el análisis (HTTP ${response.status}).`);
+      }
+
+      if (!data || 'error' in data) throw new Error('El servidor respondió sin un reporte válido.');
       setReport(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error inesperado.');
