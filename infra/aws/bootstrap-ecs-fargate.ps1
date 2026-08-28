@@ -1,7 +1,47 @@
 $ErrorActionPreference = 'Stop'
 $Profile = 'fight-ai'
 $Region = 'us-east-2'
-$AccountId = (aws sts get-caller-identity --profile $Profile --query Account --output text).Trim()
+
+function Quote-Arg([string]$arg) {
+  if ($arg -notmatch '[\s"]') { return $arg }
+  return '"' + ($arg -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1') + '"'
+}
+
+function Invoke-Aws {
+  param(
+    [Parameter(Mandatory=$true)][string[]]$Arguments,
+    [switch]$AllowFailure
+  )
+
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'aws.exe'
+  $psi.Arguments = (($Arguments | ForEach-Object { Quote-Arg $_ }) -join ' ')
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $psi
+  [void]$process.Start()
+  $stdout = $process.StandardOutput.ReadToEnd()
+  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  $code = $process.ExitCode
+
+  if ($code -ne 0 -and -not $AllowFailure) {
+    throw "AWS CLI failed ($code): aws $($Arguments -join ' ')`n$stderr"
+  }
+
+  return [pscustomobject]@{
+    ExitCode = $code
+    Output = $stdout.Trim()
+    Error = $stderr.Trim()
+  }
+}
+
+$identity = Invoke-Aws -Arguments @('sts','get-caller-identity','--profile',$Profile,'--query','Account','--output','text')
+$AccountId = $identity.Output.Trim()
 if (-not $AccountId) { throw 'AWS profile fight-ai is not authenticated.' }
 
 $DeployRole = 'FightAIGitHubDeployRole'
@@ -15,13 +55,15 @@ $taskTrustPath = Join-Path $env:TEMP 'fight-ai-ecs-task-trust.json'
 }
 '@ | Set-Content -Encoding ascii $taskTrustPath
 
-aws iam get-role --role-name $ExecutionRole --profile $Profile *> $null
-if ($LASTEXITCODE -ne 0) {
-  aws iam create-role --role-name $ExecutionRole --assume-role-policy-document "file://$taskTrustPath" --profile $Profile | Out-Null
+$roleCheck = Invoke-Aws -Arguments @('iam','get-role','--role-name',$ExecutionRole,'--profile',$Profile) -AllowFailure
+if ($roleCheck.ExitCode -ne 0) {
+  Write-Host "Creating IAM role $ExecutionRole..."
+  Invoke-Aws -Arguments @('iam','create-role','--role-name',$ExecutionRole,'--assume-role-policy-document',"file://$taskTrustPath",'--profile',$Profile) | Out-Null
 } else {
-  aws iam update-assume-role-policy --role-name $ExecutionRole --policy-document "file://$taskTrustPath" --profile $Profile | Out-Null
+  Write-Host "Updating IAM trust policy for $ExecutionRole..."
+  Invoke-Aws -Arguments @('iam','update-assume-role-policy','--role-name',$ExecutionRole,'--policy-document',"file://$taskTrustPath",'--profile',$Profile) | Out-Null
 }
-aws iam attach-role-policy --role-name $ExecutionRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy --profile $Profile | Out-Null
+Invoke-Aws -Arguments @('iam','attach-role-policy','--role-name',$ExecutionRole,'--policy-arn','arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy','--profile',$Profile) | Out-Null
 
 $policyPath = Join-Path $env:TEMP 'fight-ai-ecs-deploy-policy.json'
 @'
@@ -39,8 +81,10 @@ $policyPath = Join-Path $env:TEMP 'fight-ai-ecs-deploy-policy.json'
 }
 '@.Replace('__ACCOUNT__', $AccountId) | Set-Content -Encoding ascii $policyPath
 
-aws iam put-role-policy --role-name $DeployRole --policy-name FightAIWebDeploy --policy-document "file://$policyPath" --profile $Profile
-if ($LASTEXITCODE -ne 0) { throw 'Failed to update FightAI web deploy permissions for ECS Fargate.' }
+Invoke-Aws -Arguments @('iam','put-role-policy','--role-name',$DeployRole,'--policy-name','FightAIWebDeploy','--policy-document',"file://$policyPath",'--profile',$Profile) | Out-Null
+
+Invoke-Aws -Arguments @('iam','get-role','--role-name',$ExecutionRole,'--profile',$Profile) | Out-Null
+Invoke-Aws -Arguments @('iam','get-role','--role-name',$DeployRole,'--profile',$Profile) | Out-Null
 
 Write-Host ''
 Write-Host 'Fight AI ECS Fargate bootstrap VERIFIED.' -ForegroundColor Green
