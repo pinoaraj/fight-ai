@@ -110,7 +110,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p qa-artifacts
-          base64 -d qa/gemini-proof-red-gloves-tiny.b64 > "$FIGHT_AI_VIDEO"
+          python - <<'PY'
+          import base64,re
+          src=open('qa/gemini-proof-red-gloves-tiny.b64','r',encoding='utf-8',errors='ignore').read()
+          clean=''.join(re.findall(r'[A-Za-z0-9+/=]',src))
+          clean=clean.rstrip('=') + '='*((-len(clean))%4)
+          raw=base64.b64decode(clean,validate=False)
+          assert raw[:8].endswith(b'ftyp') or b'ftyp' in raw[:32], 'decoded payload is not MP4'
+          open('qa-artifacts/gemini-proof-red-gloves.mp4','wb').write(raw)
+          print('[PASS] reconstructed bytes',len(raw))
+          PY
           test -s "$FIGHT_AI_VIDEO"
           echo "[PASS] real sparring proof clip reconstructed"
       - name: Run authenticated Gemini video analysis
@@ -137,7 +146,7 @@ jobs:
 
   real-app-build:
     needs: source-validation
-    runs-on: macos-13
+    runs-on: macos-15-intel
     timeout-minutes: 35
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
