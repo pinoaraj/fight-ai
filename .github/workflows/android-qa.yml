@@ -164,7 +164,7 @@ jobs:
           profile: pixel_7
           disable-animations: false
           script: |
-            set -euo pipefail
+            set -eu
             mkdir -p qa-artifacts
             APK=qa/full-source/android/app/build/outputs/apk/debug/app-debug.apk
             test -f "$APK"
