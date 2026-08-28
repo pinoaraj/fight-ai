@@ -11,20 +11,14 @@ $TrustPath = Join-Path $env:TEMP 'fight-ai-oidc-trust-fixed.json'
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": {
-        "Federated": "__PROVIDER_ARN__"
-      },
+      "Principal": {"Federated": "__PROVIDER_ARN__"},
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": [
-            "repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/web/mvp",
-            "repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/main"
-          ]
-        }
+        "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+        "StringLike": {"token.actions.githubusercontent.com:sub": [
+          "repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/web/mvp",
+          "repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/main"
+        ]}
       }
     }
   ]
@@ -44,7 +38,7 @@ $PolicyPath = Join-Path $env:TEMP 'fight-ai-web-deploy-policy-fixed.json'
     {"Effect":"Allow","Action":["apprunner:CreateService","apprunner:ListServices"],"Resource":"*"},
     {"Effect":"Allow","Action":["apprunner:DescribeService","apprunner:StartDeployment","apprunner:UpdateService"],"Resource":"arn:aws:apprunner:us-east-2:__ACCOUNT__:service/fight-ai-web/*"},
     {"Effect":"Allow","Action":"iam:PassRole","Resource":["arn:aws:iam::__ACCOUNT__:role/FightAIAppRunnerECRAccessRole","arn:aws:iam::__ACCOUNT__:role/FightAIAppRunnerInstanceRole"]},
-    {"Effect":"Allow","Action":["secretsmanager:CreateSecret","secretsmanager:DescribeSecret","secretsmanager:PutSecretValue","secretsmanager:GetSecretValue"],"Resource":"arn:aws:secretsmanager:us-east-2:__ACCOUNT__:secret:fight-ai/gemini-*"},
+    {"Effect":"Allow","Action":["ssm:PutParameter","ssm:GetParameter","ssm:GetParameters"],"Resource":"arn:aws:ssm:us-east-2:__ACCOUNT__:parameter/fight-ai/gemini-api-key"},
     {"Effect":"Allow","Action":["iam:GetRole","iam:CreateRole","iam:PutRolePolicy","iam:UpdateAssumeRolePolicy"],"Resource":"arn:aws:iam::__ACCOUNT__:role/FightAIAppRunnerInstanceRole"}
   ]
 }
@@ -56,4 +50,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to update FightAIWebDeploy permissions.
 Write-Host ''
 Write-Host 'Fight AI OIDC trust VERIFIED.' -ForegroundColor Green
 Write-Host 'Subject: repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/web/mvp'
-Write-Host 'GitHub deploy role also has scoped permissions for the Gemini runtime secret.'
+Write-Host 'GitHub deploy role has scoped SSM permissions for the Gemini SecureString runtime parameter.'
