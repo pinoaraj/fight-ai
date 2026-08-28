@@ -29,6 +29,15 @@ launch_app(){
   adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
 }
 
+app_fatal_in_log(){
+  local file="$1"
+  # Android 35 emulator system processes can ANR while the hosted runner is
+  # saturated. A release failure is valid only when AndroidRuntime identifies
+  # Fight AI itself as the crashing process. Do not let com.android.phone or
+  # System UI failures masquerade as an application crash.
+  grep -Eq "Process: ${APP_ID}([,[:space:]]|$)|FATAL EXCEPTION.*${APP_ID}|${APP_ID}.*FATAL EXCEPTION|am_crash.*${APP_ID}" "$file" 2>/dev/null
+}
+
 recover_system_ui_anr(){
   local xml="$OUT/fightai-home.xml"
   for attempt in 1 2 3; do
@@ -70,8 +79,8 @@ fi
 
 recover_system_ui_anr
 
-if grep -Eq "FATAL EXCEPTION|AndroidRuntime.*FATAL" "$OUT/logcat-home.txt"; then
-  log "FAIL: fatal Android exception detected after launch"
+if app_fatal_in_log "$OUT/logcat-home.txt"; then
+  log "FAIL: Fight AI process crashed after launch"
   exit 10
 fi
 
@@ -88,13 +97,14 @@ if grep -q "Crea un perfil" "$OUT/fightai-home.xml" && grep -q "Create a local b
 fi
 log "PASS: no duplicated ES/EN onboarding body"
 
+adb logcat -c || true
 adb shell am force-stop "$APP_ID"
 launch_app
 sleep 4
 adb exec-out screencap -p > "$OUT/02-relaunch.png"
 adb logcat -d > "$OUT/logcat-relaunch.txt"
-if grep -Eq "FATAL EXCEPTION|AndroidRuntime.*FATAL" "$OUT/logcat-relaunch.txt"; then
-  log "FAIL: fatal Android exception detected after relaunch"
+if app_fatal_in_log "$OUT/logcat-relaunch.txt"; then
+  log "FAIL: Fight AI process crashed after relaunch"
   exit 13
 fi
 log "PASS: force-stop/relaunch survived"
