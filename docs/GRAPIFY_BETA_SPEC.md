@@ -42,8 +42,10 @@ Current MVP scope:
 - demo mode clearly marked as non-AI
 - shared-backend adapter aligned with the mobile engine
 - authenticated server-side Gemini video-analysis fallback when the shared backend is not configured
-- separate CI with TypeScript, production build and Docker build
+- CI with TypeScript, Next.js production build, shared-backend adapter/runtime smoke QA and Docker production build
 - `/api/health` exposing `backendConfigured`, `geminiConfigured` and `analysisReady`
+
+The CI runtime smoke boots the built Next.js server against a local mock Fight AI backend, validates `/api/health`, sends the multipart analysis contract through `/api/analyze`, and verifies provider attribution, summary, timestamp evidence and drill normalization before the Docker gate.
 
 Next.js was moved from 15.5.2 to maintenance-security release 15.5.24 before public deployment.
 
@@ -75,6 +77,7 @@ Before release, validate together:
 - fighter identity persistence
 - analysis rendering
 - asynchronous backend polling and legacy fallback
+- shared-backend multipart adapter/runtime smoke
 - authenticated Gemini fallback
 - ES/EN consistency
 - provider labels + `usedInReport`
@@ -107,6 +110,8 @@ Current web production architecture:
 
 The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
 
+AWS compute remains externally blocked at account level: read-only probes across major commercial regions return `OptInRequired` for EC2. OIDC and ECR are functioning; no long-lived AWS access keys are used. Public deployment resumes once the account's advanced/computing services are activated.
+
 ### Gemini runtime secret status
 AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionRequiredException` for this account. For the beta deployment only, the GitHub Actions `GEMINI_API_KEY` secret is injected as a server-side ECS task environment variable. It is never committed to Git and is never sent to browser JavaScript. Migrate it to Secrets Manager/SSM when those services become available for the account.
 
@@ -129,6 +134,6 @@ AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionR
 
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: complete ECS Fargate deployment, verify public health, then run real video upload/report E2E.
+2. `web/mvp`: keep CI + runtime adapter QA green; once AWS compute is activated, complete ECS Fargate deployment, verify public health, then run real video upload/report E2E.
 3. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
 4. Keep both clients aligned to this Grapify spec and the same report contract.
