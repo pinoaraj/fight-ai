@@ -151,20 +151,33 @@ jobs:
             exit 1
           fi
 
-          ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=320x240:d=1 -vf "drawtext=text='Fight AI smoke':fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2" -r 24 -pix_fmt yuv420p -c:v libx264 -movflags +faststart /tmp/fight-ai-smoke.mp4
+          python - <<'PY'
+          import base64, pathlib
+          src=pathlib.Path('qa/gemini-proof-red-gloves-tiny.b64')
+          if not src.exists():
+              raise SystemExit('Missing red-gloves Gemini proof clip payload')
+          raw=''.join(src.read_text(encoding='utf-8').split())
+          pathlib.Path('/tmp/fight-ai-red-gloves-smoke.mp4').write_bytes(base64.b64decode(raw, validate=False))
+          PY
+          test -s /tmp/fight-ai-red-gloves-smoke.mp4
+
           RESULT=$(curl --fail --max-time 240 -sS \
-            -F 'video=@/tmp/fight-ai-smoke.mp4;type=video/mp4' \
+            -F 'video=@/tmp/fight-ai-red-gloves-smoke.mp4;type=video/mp4' \
             -F 'language=es' \
             -F 'sport=boxing' \
-            -F 'athlete_marker=peleador visible' \
+            -F 'athlete_marker=red_gloves' \
+            -F 'glove_color=red' \
             -F 'stance=orthodox' \
             "$URL/api/analyze")
           echo "$RESULT" > /tmp/fight-ai-smoke-result.json
           python - <<'PY'
           import json
           data=json.load(open('/tmp/fight-ai-smoke-result.json',encoding='utf-8'))
+          assert data.get('mode') == 'live', data
           assert data.get('provider') == 'Gemini', data
           assert data.get('usedInReport') is True, data
           assert isinstance(data.get('summary'), str) and data['summary'].strip(), data
-          print('Gemini deployed analysis smoke: VERIFIED')
+          evidence=data.get('evidence')
+          assert isinstance(evidence, list) and len(evidence) > 0, data
+          print(f"Gemini deployed red-gloves analysis smoke: VERIFIED ({len(evidence)} evidence items)")
           PY
