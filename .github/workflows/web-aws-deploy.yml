@@ -11,6 +11,7 @@ on:
       - 'package.json'
       - 'tsconfig.json'
       - 'app/**'
+      - 'infra/aws/**'
 
 permissions:
   contents: read
@@ -50,23 +51,19 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE_SHA="$REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA}"
-          IMAGE_LATEST="$REGISTRY/$ECR_REPOSITORY:latest"
-          docker build -t "$IMAGE_SHA" -t "$IMAGE_LATEST" .
+          docker build -t "$IMAGE_SHA" .
           docker push "$IMAGE_SHA"
-          docker push "$IMAGE_LATEST"
-          echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
+          echo "IMAGE_SHA=$IMAGE_SHA" >> "$GITHUB_ENV"
 
       - name: Provision ECS networking and load balancer
         run: |
           set -euo pipefail
           VPC_ID=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --region "$AWS_REGION" --query 'Vpcs[0].VpcId' --output text)
-          test -n "$VPC_ID"
-          test "$VPC_ID" != "None"
+          test -n "$VPC_ID" && test "$VPC_ID" != "None"
           SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC_ID" --region "$AWS_REGION" --query 'Subnets[].SubnetId' --output text)
           set -- $SUBNETS
           [ "$#" -ge 2 ]
-          SUBNET1=$1
-          SUBNET2=$2
+          SUBNET1=$1; SUBNET2=$2
 
           ALB_SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=fight-ai-web-alb-sg Name=vpc-id,Values="$VPC_ID" --region "$AWS_REGION" --query 'SecurityGroups[0].GroupId' --output text)
           if [ -z "$ALB_SG" ] || [ "$ALB_SG" = "None" ]; then
@@ -83,6 +80,7 @@ jobs:
           ALB_ARN=$(aws elbv2 describe-load-balancers --names "$ALB_NAME" --region "$AWS_REGION" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || true)
           if [ -z "$ALB_ARN" ] || [ "$ALB_ARN" = "None" ]; then
             ALB_ARN=$(aws elbv2 create-load-balancer --name "$ALB_NAME" --type application --scheme internet-facing --subnets "$SUBNET1" "$SUBNET2" --security-groups "$ALB_SG" --region "$AWS_REGION" --query 'LoadBalancers[0].LoadBalancerArn' --output text)
+            aws elbv2 wait load-balancer-available --load-balancer-arns "$ALB_ARN" --region "$AWS_REGION"
           fi
 
           TG_ARN=$(aws elbv2 describe-target-groups --names "$TARGET_GROUP_NAME" --region "$AWS_REGION" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
@@ -95,7 +93,6 @@ jobs:
             aws elbv2 create-listener --load-balancer-arn "$ALB_ARN" --protocol HTTP --port 80 --default-actions Type=forward,TargetGroupArn="$TG_ARN" --region "$AWS_REGION" >/dev/null
           fi
 
-          echo "VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
           echo "SUBNET1=$SUBNET1" >> "$GITHUB_ENV"
           echo "SUBNET2=$SUBNET2" >> "$GITHUB_ENV"
           echo "TASK_SG=$TASK_SG" >> "$GITHUB_ENV"
@@ -110,54 +107,18 @@ jobs:
           set -euo pipefail
           test -n "$GEMINI_API_KEY"
           aws ecs create-cluster --cluster-name "$ECS_CLUSTER" --region "$AWS_REGION" >/dev/null 2>&1 || true
-
           python - <<'PY'
           import json, os
-          td = {
-            "family": os.environ["ECS_TASK_FAMILY"],
-            "networkMode": "awsvpc",
-            "requiresCompatibilities": ["FARGATE"],
-            "cpu": "512",
-            "memory": "1024",
-            "executionRoleArn": os.environ["ECS_EXECUTION_ROLE_ARN"],
-            "containerDefinitions": [{
-              "name": "fight-ai-web",
-              "image": os.environ["IMAGE_LATEST"],
-              "essential": True,
-              "portMappings": [{"containerPort": 3000, "protocol": "tcp"}],
-              "environment": [
-                {"name": "GEMINI_API_KEY", "value": os.environ["GEMINI_API_KEY"]},
-                {"name": "GEMINI_MODEL", "value": "gemini-2.5-flash"}
-              ]
-            }]
-          }
-          with open('/tmp/task-def.json','w',encoding='utf-8') as f:
-            json.dump(td, f)
+          td={"family":os.environ["ECS_TASK_FAMILY"],"networkMode":"awsvpc","requiresCompatibilities":["FARGATE"],"cpu":"512","memory":"1024","executionRoleArn":os.environ["ECS_EXECUTION_ROLE_ARN"],"containerDefinitions":[{"name":"fight-ai-web","image":os.environ["IMAGE_SHA"],"essential":True,"portMappings":[{"containerPort":3000,"protocol":"tcp"}],"environment":[{"name":"GEMINI_API_KEY","value":os.environ["GEMINI_API_KEY"]},{"name":"GEMINI_MODEL","value":"gemini-2.5-flash"}]}]}
+          with open('/tmp/task-def.json','w',encoding='utf-8') as f: json.dump(td,f)
           PY
-
           TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file:///tmp/task-def.json --region "$AWS_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
           SERVICE_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" --query 'services[0].status' --output text 2>/dev/null || true)
-
           NETWORK="awsvpcConfiguration={subnets=[$SUBNET1,$SUBNET2],securityGroups=[$TASK_SG],assignPublicIp=ENABLED}"
           if [ -z "$SERVICE_STATUS" ] || [ "$SERVICE_STATUS" = "None" ]; then
-            aws ecs create-service \
-              --cluster "$ECS_CLUSTER" \
-              --service-name "$ECS_SERVICE" \
-              --task-definition "$TASK_DEF_ARN" \
-              --desired-count 1 \
-              --launch-type FARGATE \
-              --network-configuration "$NETWORK" \
-              --load-balancers targetGroupArn="$TG_ARN",containerName=fight-ai-web,containerPort=3000 \
-              --health-check-grace-period-seconds 90 \
-              --region "$AWS_REGION" >/dev/null
+            aws ecs create-service --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --task-definition "$TASK_DEF_ARN" --desired-count 1 --launch-type FARGATE --network-configuration "$NETWORK" --load-balancers targetGroupArn="$TG_ARN",containerName=fight-ai-web,containerPort=3000 --health-check-grace-period-seconds 90 --region "$AWS_REGION" >/dev/null
           else
-            aws ecs update-service \
-              --cluster "$ECS_CLUSTER" \
-              --service "$ECS_SERVICE" \
-              --task-definition "$TASK_DEF_ARN" \
-              --desired-count 1 \
-              --force-new-deployment \
-              --region "$AWS_REGION" >/dev/null
+            aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$TASK_DEF_ARN" --desired-count 1 --force-new-deployment --region "$AWS_REGION" >/dev/null
           fi
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION"
 
