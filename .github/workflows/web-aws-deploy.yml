@@ -89,6 +89,7 @@ jobs:
             ALB_ARN=$(aws elbv2 create-load-balancer --name "$ALB_NAME" --type application --scheme internet-facing --subnets "$SUBNET1" "$SUBNET2" --security-groups "$ALB_SG" --region "$DEPLOY_REGION" --query 'LoadBalancers[0].LoadBalancerArn' --output text)
             aws elbv2 wait load-balancer-available --load-balancer-arns "$ALB_ARN" --region "$DEPLOY_REGION"
           fi
+          aws elbv2 modify-load-balancer-attributes --load-balancer-arn "$ALB_ARN" --attributes Key=idle_timeout.timeout_seconds,Value=300 --region "$DEPLOY_REGION" >/dev/null
 
           TG_ARN=$(aws elbv2 describe-target-groups --names "$TARGET_GROUP_NAME" --region "$DEPLOY_REGION" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true)
           if [ -z "$TG_ARN" ] || [ "$TG_ARN" = "None" ]; then
