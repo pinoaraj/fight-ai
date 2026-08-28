@@ -93,9 +93,51 @@ jobs:
             qa/full-source/QA_REPORT_0_14_0.md
             qa/full-source/BETA_0_14_0.md
 
-  real-app-build:
+  gemini-video-proof:
     needs: source-validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-2.5-flash
+      FIGHT_AI_VIDEO: qa-artifacts/gemini-proof-red-gloves.mp4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Reconstruct real red-gloves proof clip
+        run: |
+          set -euo pipefail
+          mkdir -p qa-artifacts
+          base64 -d qa/gemini-proof-red-gloves-tiny.b64 > "$FIGHT_AI_VIDEO"
+          test -s "$FIGHT_AI_VIDEO"
+          echo "[PASS] real sparring proof clip reconstructed"
+      - name: Run authenticated Gemini video analysis
+        run: python qa/gemini_video_probe.py
+      - name: Validate Gemini attribution and evidence
+        run: |
+          python - <<'PY'
+          import json
+          p='qa-artifacts/gemini-red-gloves-analysis.json'
+          d=json.load(open(p,encoding='utf-8'))
+          assert d['provider']=='Gemini'
+          assert d['usedInReport'] is True
+          assert d['target']=='red gloves'
+          a=d['analysis']
+          assert a.get('evidence'), 'Gemini returned no timestamped evidence'
+          print('[PASS] Gemini returned accepted red-gloves evidence; usedInReport=true')
+          PY
+      - name: Upload Gemini proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fight-ai-gemini-red-gloves-proof
+          path: qa-artifacts/gemini-red-gloves-analysis.json
+
+  real-app-build:
+    needs: source-validation
+    runs-on: macos-13
     timeout-minutes: 35
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -114,7 +156,7 @@ jobs:
           mkdir -p qa/full-source
           cat bootstrap/app014/part-*.b64 > /tmp/fightai.b64
           base64 -d /tmp/fightai.b64 > /tmp/fightai.tar.gz
-          echo "b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2  /tmp/fightai.tar.gz" | sha256sum -c -
+          echo "b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2  /tmp/fightai.tar.gz" | shasum -a 256 -c -
           tar -xzf /tmp/fightai.tar.gz -C qa/full-source
       - name: Build real Expo Android APK
         working-directory: qa/full-source
@@ -126,7 +168,7 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
-      - name: Run real Fight AI app on Android 35
+      - name: Run real Fight AI app on accelerated Android 35
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
