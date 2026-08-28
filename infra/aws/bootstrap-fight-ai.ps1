@@ -3,6 +3,10 @@ $ErrorActionPreference = 'Stop'
 $Profile = 'fight-ai'
 $Region = 'us-east-2'
 $Repo = 'pinoaraj/fight-ai'
+$GitHubOwner = 'pinoaraj'
+$GitHubOwnerId = '132783424'
+$GitHubRepoName = 'fight-ai'
+$GitHubRepoId = '1348995885'
 $DeployRole = 'FightAIGitHubDeployRole'
 $AppRunnerAccessRole = 'FightAIAppRunnerECRAccessRole'
 $EcrRepo = 'fight-ai-web'
@@ -57,6 +61,7 @@ if ($providerCheck.ExitCode -ne 0) {
   Invoke-Aws -Arguments @('iam','create-open-id-connect-provider','--url','https://token.actions.githubusercontent.com','--client-id-list','sts.amazonaws.com','--profile',$Profile) | Out-Null
 }
 
+$ImmutableRepo = "${GitHubOwner}@${GitHubOwnerId}/${GitHubRepoName}@${GitHubRepoId}"
 $trust = @"
 {
   "Version": "2012-10-17",
@@ -67,8 +72,8 @@ $trust = @"
     "Condition": {
       "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
       "StringLike": {"token.actions.githubusercontent.com:sub": [
-        "repo:$Repo:ref:refs/heads/web/mvp",
-        "repo:$Repo:ref:refs/heads/main"
+        "repo:$ImmutableRepo:ref:refs/heads/web/mvp",
+        "repo:$ImmutableRepo:ref:refs/heads/main"
       ]}
     }
   }]
@@ -82,6 +87,7 @@ if ($roleCheck.ExitCode -ne 0) {
   Write-Host "Creating IAM role $DeployRole..."
   Invoke-Aws -Arguments @('iam','create-role','--role-name',$DeployRole,'--assume-role-policy-document',"file://$trustPath",'--profile',$Profile) | Out-Null
 } else {
+  Write-Host "Updating IAM trust policy for immutable GitHub OIDC subject..."
   Invoke-Aws -Arguments @('iam','update-assume-role-policy','--role-name',$DeployRole,'--policy-document',"file://$trustPath",'--profile',$Profile) | Out-Null
 }
 
@@ -134,6 +140,7 @@ Write-Host ''
 Write-Host 'Fight AI AWS bootstrap VERIFIED.' -ForegroundColor Green
 Write-Host "Account: $AccountId"
 Write-Host "Region: $Region"
+Write-Host "GitHub OIDC subject: repo:$ImmutableRepo:ref:refs/heads/web/mvp"
 Write-Host "GitHub OIDC role: arn:aws:iam::${AccountId}:role/${DeployRole}"
 Write-Host "ECR repository: $EcrRepo"
 Write-Host "App Runner ECR role: $accessRoleArn"
