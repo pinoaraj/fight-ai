@@ -36,10 +36,13 @@ const demo: Report = {
 export default function Home() {
   const [video, setVideo] = useState<File | null>(null);
   const [fighter, setFighter] = useState('Guantes rojos');
+  const [sport, setSport] = useState<'boxing' | 'kickboxing'>('boxing');
+  const [stance, setStance] = useState<'orthodox' | 'southpaw' | 'switch'>('orthodox');
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const videoUrl = useMemo(() => (video ? URL.createObjectURL(video) : ''), [video]);
 
   async function analyze() {
@@ -48,7 +51,12 @@ export default function Home() {
     try {
       const body = new FormData();
       body.append('video', video);
-      body.append('fighter', fighter);
+      body.append('language', 'es');
+      body.append('sport', sport);
+      body.append('stance', stance);
+      body.append('athlete_marker', fighter === 'Guantes rojos' ? 'red_gloves' : 'visual_reid');
+      if (fighter === 'Guantes rojos') body.append('glove_color', 'red');
+      if (fighter === 'Guantes azules') body.append('glove_color', 'blue');
       const response = await fetch('/api/analyze', { method: 'POST', body });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'No se pudo ejecutar el análisis.');
@@ -59,8 +67,8 @@ export default function Home() {
   }
 
   function jump(time: string) {
-    const node = document.querySelector('video');
-    if (!(node instanceof HTMLVideoElement)) return;
+    const node = videoRef.current;
+    if (!node) return;
     const [m, s] = time.split(':').map(Number);
     node.currentTime = m * 60 + s;
     node.play().catch(() => undefined);
@@ -89,15 +97,20 @@ export default function Home() {
           {!video ? (
             <button className="drop" onClick={() => inputRef.current?.click()}><strong>SUBIR VIDEO</strong><span>MP4, MOV o archivo compatible del navegador</span></button>
           ) : (
-            <div className="videoWrap"><video src={videoUrl} controls/><div className="fileRow"><span>{video.name}</span><button onClick={() => inputRef.current?.click()}>Cambiar</button></div></div>
+            <div className="videoWrap"><video ref={videoRef} src={videoUrl} controls/><div className="fileRow"><span>{video.name}</span><button onClick={() => inputRef.current?.click()}>Cambiar</button></div></div>
           )}
 
           <div className="sectionTitle fighterTitle"><span>02</span><div><b>PELEADOR OBJETIVO</b><small>La identidad se mantiene durante el análisis</small></div></div>
           <div className="fighters">
             {['Guantes rojos','Guantes azules','Otro'].map(x => <button key={x} className={fighter === x ? 'active' : ''} onClick={() => setFighter(x)}>{x}</button>)}
           </div>
+          <div className="analysisOptions">
+            <label>Disciplina<select value={sport} onChange={e => setSport(e.target.value as 'boxing' | 'kickboxing')}><option value="boxing">Boxeo</option><option value="kickboxing">Kickboxing</option></select></label>
+            <label>Guardia<select value={stance} onChange={e => setStance(e.target.value as 'orthodox' | 'southpaw' | 'switch')}><option value="orthodox">Ortodoxa</option><option value="southpaw">Zurda</option><option value="switch">Switch</option></select></label>
+          </div>
           <button className="primary" disabled={busy || !video} onClick={analyze}>{busy ? 'ANALIZANDO…' : 'ANALIZAR SPARRING'}</button>
           <button className="secondary" onClick={() => { setReport(demo); setError(''); }}>VER DEMO DEL REPORTE</button>
+          {busy && <div className="processingNote">El video puede tardar varios minutos. Fight AI mantiene esta pantalla abierta mientras el motor procesa el análisis.</div>}
           {error && <div className="error">{error}</div>}
         </div>
 
