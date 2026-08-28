@@ -16,10 +16,16 @@ adb shell pm clear "$APP_ID" || true
 adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
 sleep 5
 
-adb shell uiautomator dump /sdcard/fightai-home.xml >/dev/null
-adb pull /sdcard/fightai-home.xml "$OUT/fightai-home.xml" >/dev/null
+# Android 35 may deny adb pull from /sdcard even when uiautomator can write there.
+# Stream the hierarchy over stdout instead so the QA gate does not depend on shared-storage permissions.
+adb exec-out uiautomator dump /dev/tty 2>/dev/null | sed -n '/<?xml/,$p' > "$OUT/fightai-home.xml"
 adb exec-out screencap -p > "$OUT/01-home.png"
 adb logcat -d > "$OUT/logcat-home.txt"
+
+if ! test -s "$OUT/fightai-home.xml"; then
+  log "FAIL: UI hierarchy capture was empty"
+  exit 9
+fi
 
 if grep -Eq "FATAL EXCEPTION|AndroidRuntime.*FATAL" "$OUT/logcat-home.txt"; then
   log "FAIL: fatal Android exception detected after launch"
@@ -40,7 +46,7 @@ if grep -q "Crea un perfil" "$OUT/fightai-home.xml" && grep -q "Create a local b
 fi
 log "PASS: no duplicated ES/EN onboarding body"
 
-# Exercise configuration change/relaunch resilience.
+# Exercise process restart resilience.
 adb shell am force-stop "$APP_ID"
 adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
 sleep 2
