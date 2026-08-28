@@ -113,12 +113,17 @@ jobs:
           python - <<'PY'
           import base64,re
           src=open('qa/gemini-proof-red-gloves-tiny.b64','r',encoding='utf-8',errors='ignore').read()
-          clean=''.join(re.findall(r'[A-Za-z0-9+/=]',src))
-          clean=clean.rstrip('=') + '='*((-len(clean))%4)
+          clean=''.join(re.findall(r'[A-Za-z0-9+/=]',src)).rstrip('=')
+          # GitHub text transport left one incomplete base64 quartet. Discard only the
+          # impossible trailing symbol, preserving the MP4 payload from its beginning.
+          if len(clean) % 4 == 1:
+              clean=clean[:-1]
+          clean += '='*((-len(clean))%4)
           raw=base64.b64decode(clean,validate=False)
-          assert raw[:8].endswith(b'ftyp') or b'ftyp' in raw[:32], 'decoded payload is not MP4'
+          assert b'ftyp' in raw[:32], 'decoded payload is not MP4'
+          assert len(raw) > 4096, 'decoded proof clip is unexpectedly small'
           open('qa-artifacts/gemini-proof-red-gloves.mp4','wb').write(raw)
-          print('[PASS] reconstructed bytes',len(raw))
+          print('[PASS] reconstructed MP4 bytes',len(raw))
           PY
           test -s "$FIGHT_AI_VIDEO"
           echo "[PASS] real sparring proof clip reconstructed"
@@ -155,17 +160,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20.19.4'
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
       - name: Reconstruct Fight AI source
         run: |
+          set -euo pipefail
           mkdir -p qa/full-source
           cat bootstrap/app014/part-*.b64 > /tmp/fightai.b64
-          base64 -d /tmp/fightai.b64 > /tmp/fightai.tar.gz
-          echo "b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2  /tmp/fightai.tar.gz" | shasum -a 256 -c -
+          python3 - <<'PY'
+          import base64,hashlib
+          encoded=open('/tmp/fightai.b64','rb').read()
+          raw=base64.b64decode(encoded)
+          digest=hashlib.sha256(raw).hexdigest()
+          expected='b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2'
+          assert digest == expected, f'source archive checksum mismatch: {digest}'
+          open('/tmp/fightai.tar.gz','wb').write(raw)
+          print('[PASS] source archive checksum', digest)
+          PY
           tar -xzf /tmp/fightai.tar.gz -C qa/full-source
       - name: Build real Expo Android APK
         working-directory: qa/full-source
