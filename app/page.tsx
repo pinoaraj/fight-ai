@@ -71,7 +71,7 @@ export default function Home() {
         throw new Error(`No se pudo ejecutar el análisis (HTTP ${response.status}).`);
       }
 
-      if (!data || 'error' in data) throw new Error('El servidor respondió sin un reporte válido.');
+      if (!data || !('summary' in data)) throw new Error('El servidor respondió sin un reporte válido.');
       setReport(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error inesperado.');
