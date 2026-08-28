@@ -4,9 +4,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const authHeaders = () => process.env.FIGHT_AI_WEB_TOKEN
-  ? { Authorization: `Bearer ${process.env.FIGHT_AI_WEB_TOKEN}` }
-  : undefined;
 
 function secondsToClock(value: number) {
   const total = Math.max(0, Math.round(value));
@@ -39,8 +36,7 @@ function normalizeReport(raw: unknown) {
   const providerUsed = videoAI.usedInReport === true;
   const provider = providerUsed && typeof videoAI.provider === 'string' ? videoAI.provider : 'CV / Pose';
 
-  const evidenceSource = [...weaknessesRaw, ...strengthsRaw];
-  const evidence = evidenceSource.flatMap(item => {
+  const evidence = [...weaknessesRaw, ...strengthsRaw].flatMap(item => {
     if (!item || typeof item !== 'object') return [];
     const x = item as Record<string, unknown>;
     const timestamps = Array.isArray(x.timestamps) ? x.timestamps.filter(v => typeof v === 'number') as number[] : [];
@@ -78,7 +74,9 @@ function normalizeReport(raw: unknown) {
 }
 
 async function requestJson(url: string, init?: RequestInit) {
-  const response = await fetch(url, { ...init, headers: { ...(authHeaders() || {}), ...(init?.headers || {}) }, cache: 'no-store' });
+  const headers = new Headers(init?.headers);
+  if (process.env.FIGHT_AI_WEB_TOKEN) headers.set('Authorization', `Bearer ${process.env.FIGHT_AI_WEB_TOKEN}`);
+  const response = await fetch(url, { ...init, headers, cache: 'no-store' });
   const text = await response.text();
   let data: unknown;
   try { data = JSON.parse(text); } catch { throw new Error(`Respuesta inválida del motor (${response.status}).`); }
