@@ -3,10 +3,10 @@
 _Last updated: 2026-08-28_
 
 ## 1. Product goal
-Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis engine. It must provide concise coach-style feedback grounded in video evidence, not invented strike counts or unsupported certainty.
+Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide concise coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
 
 ## 2. Shared analysis contract
-Every client must consume the same logical report schema:
+Every client consumes the same logical report schema:
 - target fighter identity + confidence
 - provider status and `usedInReport`
 - summary
@@ -17,26 +17,20 @@ Every client must consume the same logical report schema:
 - drills
 - timestamped evidence with confidence, observation, why-it-matters and correction
 
-Gemini may be credited only after an authenticated request succeeds and accepted evidence is present. CV/Pose and Video-AI sources must be labeled separately.
+Gemini may be credited only after an authenticated request succeeds and accepted evidence is present. CV/Pose and Video-AI sources must remain distinguishable.
 
 ## 3. Fighter identity
 Initial target selection is explicit. Re-identification uses visible cues such as glove/shirt color, relative height/build, stance and temporal continuity. LOW-confidence windows are excluded from evidence.
 
 ## 4. Mobile baseline
-Current mobile beta work includes:
-- Android Expo app
-- PDF report export/share
-- provider attribution gate
-- visual coaching demos
-- ES/EN language consistency
-- Android automated QA with real APK + virtual navigation agent
+Current mobile beta work includes Android Expo, PDF report export/share, provider attribution gate, visual coaching demos, ES/EN language consistency and Android automated QA with real APK + virtual navigation agent.
 
-Release gate: do not call the mobile beta release-ready until source validation, demos, APK build, Android navigation and authenticated Gemini proof all pass.
+Release gate: do not call the mobile beta release-ready until source validation, demos, APK build, Android navigation and authenticated Gemini proof all pass together.
 
 ## 5. Web MVP
 Branch: `web/mvp`
 PR: #2
-Stack: Next.js 15 + React 19 + TypeScript.
+Stack: Next.js 15.5.24 + React 19 + TypeScript.
 
 Current MVP scope:
 - local video upload and playback
@@ -47,32 +41,21 @@ Current MVP scope:
 - explicit provider + `usedInReport` state
 - demo mode clearly marked as non-AI
 - shared-backend adapter aligned with the mobile engine
+- authenticated server-side Gemini video-analysis fallback when the shared backend is not configured
 - separate CI with TypeScript, production build and Docker build
-- production Docker image for cloud deployment
-- `/api/health` runtime endpoint for preview/cloud checks
+- `/api/health` exposing `backendConfigured`, `geminiConfigured` and `analysisReady`
 
-Current web QA state on commit `6b6ad1bbcfd40f797b9fd415ebcc6bb94c40f35d`:
-- dependency install: PASS
-- TypeScript: PASS
-- Next.js production build: PASS
-- production Docker image build: PASS
-- PR #2: open, draft, mergeable with `main`
+Next.js was moved from 15.5.2 to maintenance-security release 15.5.24 before public deployment.
 
-The web client must not duplicate analysis logic. It sends video + target identity to the same backend used by mobile and normalizes the shared `Analysis` object only for presentation.
+## 6. Shared backend and Gemini contract
+Preferred production path remains the shared Fight AI analysis backend via `FIGHT_AI_API_URL` and optional `FIGHT_AI_WEB_TOKEN`.
 
-## 6. Shared backend contract
-Web server configuration:
-- `FIGHT_AI_API_URL`
-- optional `FIGHT_AI_WEB_TOKEN`
+If the shared backend is absent, the web server may use authenticated Gemini directly as a temporary analysis fallback. The browser never receives the Gemini key. The server uploads the selected video to Gemini Files API, waits for ACTIVE state, requests structured Spanish coaching JSON, and marks `provider: Gemini` + `usedInReport: true` only after a successful authenticated response and valid JSON parse.
 
-Gemini keys stay server-side only; never expose them in browser JavaScript or mobile bundles.
+The fallback prompt forbids invented exact punch counts and asks for visible evidence, tactical hypotheses, at most three main priorities, actionable drills and timestamps only when supported.
 
-Backend discovery/flow mirrors the mobile client:
-1. `GET /health`
-2. if `asyncJobs=true`: `POST /jobs/analyze`, then poll `GET /jobs/{jobId}` until `COMPLETED` or `FAILED`
-3. otherwise fallback to legacy `POST /analyze`
-
-Multipart fields currently aligned with mobile include:
+## 7. Web input contract
+Multipart fields aligned with mobile include:
 - `video`
 - `language`
 - `sport`
@@ -80,81 +63,72 @@ Multipart fields currently aligned with mobile include:
 - `glove_color` when known
 - `stance`
 
-Additional visual re-identification fields supported by the mobile contract can be added to the web selector without changing the backend: `top_color`, `relative_height`, `build`, and fighter anchor coordinates.
+Additional re-identification fields can be added without changing the analysis contract: `top_color`, `relative_height`, `build`, and fighter anchor coordinates.
 
-The web adapter reads the backend `Analysis` structure (`mainTakeaway`, strengths, weaknesses, opponent analysis, rematch plan, drills and timestamps) and renders it into the web report. `realVision.videoAI.usedInReport` is the only accepted signal for displaying a Video-AI provider as having participated in the report.
+## 8. Visual coaching
+Detected mistakes should link to correction visuals. Product direction supports short motion demos, angle/trajectory graphics and simplified animated teaching examples. Visuals must correspond to the detected issue rather than generic boxing clips.
 
-## 7. Visual coaching
-Detected mistakes should link to correction visuals. Current product direction supports short motion demos, angle/trajectory graphics and simplified animated teaching examples. Visuals must correspond to the detected issue rather than generic boxing clips.
-
-## 8. QA matrix
+## 9. QA matrix
 Before release, validate together:
 - video upload/playback
 - timestamp seeking
 - fighter identity persistence
 - analysis rendering
-- asynchronous job polling and legacy fallback
-- ES/EN language consistency
-- provider labels and `usedInReport`
+- asynchronous backend polling and legacy fallback
+- authenticated Gemini fallback
+- ES/EN consistency
+- provider labels + `usedInReport`
 - CV/Pose/Video-AI source labels
 - drills and visual examples
 - PDF/export path
 - Android real-app navigation
 - web TypeScript + production build
-- web production Docker build
-- web `/api/health`
-- authenticated Gemini regression on real sparring footage
+- web Docker build
+- public `/api/health`
+- real sparring upload/report E2E
 
-Regression footage should remain outside normal Git history whenever practical. Public repositories must not become a permanent store for private sparring videos.
-
-## 9. Web deployment strategy
-### Test/preview
-The code is now build-ready for preview because TypeScript + production build + Docker build are green. A preview must clearly show when the shared backend is disconnected and must never label demo data as AI output.
-
-### AWS target
-Preferred target: private Amazon ECR image + AWS App Runner service. GitHub Actions authenticates through AWS/GitHub OIDC rather than permanent AWS access keys.
-
-Prepared repository assets:
-- `Dockerfile`
-- `.dockerignore`
-- `infra/aws/web-aws-deploy.template.yml` (inactive deployment template)
-
-The deployment template remains inactive until the AWS account authorizes the repository and the required repository variables are configured. It must first be tested as a manual deployment before any automatic production deploy is enabled.
-
-Required non-secret GitHub repository variables:
-- `AWS_REGION`
-- `AWS_ROLE_ARN`
-- `AWS_ECR_REPOSITORY`
-- `AWS_APP_RUNNER_SERVICE_ARN`
-
-Runtime server configuration:
-- `FIGHT_AI_API_URL`
-- optional `FIGHT_AI_WEB_TOKEN`
-
-No Gmail password, AWS password, static AWS access key or Gemini key belongs in source control or browser code.
+Regression footage should stay outside normal public Git history whenever practical.
 
 ## 10. AWS production architecture
-- web runtime: AWS App Runner, port 3000
-- image registry: private Amazon ECR
-- health check target: `/api/health`
-- analysis API: shared Fight AI backend
-- future production video storage: private S3 + short-lived access + explicit retention/deletion policy
-- secrets: server-side only
-- logs/metrics: cloud runtime observability
+App Runner is not used: AWS stopped onboarding new App Runner customers on 2026-03-31, and this account receives `SubscriptionRequiredException` for App Runner.
 
-Production is not considered live until the public/test URL returns the real web build and backend/provider behavior is validated end-to-end.
+Current web production architecture:
+- container registry: private Amazon ECR `fight-ai-web`
+- runtime: Amazon ECS on AWS Fargate
+- ingress: internet-facing Application Load Balancer
+- container port: 3000
+- ALB listener: HTTP 80 for beta/test URL
+- health target: `/api/health`
+- GitHub Actions authentication: GitHub OIDC with immutable owner/repository subject IDs
+- deployment role: `FightAIGitHubDeployRole`
+- ECS task execution role: `FightAIEcsTaskExecutionRole`
+- cluster/service/task family: `fight-ai-web`
+- one Fargate task for beta
+
+The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
+
+### Gemini runtime secret status
+AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionRequiredException` for this account. For the beta deployment only, the GitHub Actions `GEMINI_API_KEY` secret is injected as a server-side ECS task environment variable. It is never committed to Git and is never sent to browser JavaScript. Migrate it to Secrets Manager/SSM when those services become available for the account.
+
+### Next production hardening
+- add HTTPS with ACM certificate + port 443 before general public launch
+- move Gemini key to AWS managed secret storage
+- move uploaded video storage to private S3 with short-lived URLs and retention/deletion policy
+- add CloudWatch logs/metrics
+- deploy the shared CV/Pose backend and set `FIGHT_AI_API_URL`
 
 ## 11. Security / privacy
-- no Gemini key in client code
-- no AWS static access keys in repository
-- no personal passwords used for deployment
+- no Gemini key in client code or source control
+- no static AWS access keys in repository
+- GitHub Actions uses short-lived OIDC credentials
 - uploaded sparring video private by default
-- use temporary/presigned video access in production
-- minimize retention
+- temporary/presigned access in production
+- minimize video retention
 - provider attribution must be truthful
 - no invented statistics or certainty
 
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: AWS authorization is now the next external gate for a testable cloud URL; after authorization, activate the prepared OIDC/ECR/App Runner deployment and run real upload/report E2E.
-3. Keep both clients aligned to this Grapify spec and the same analysis contract.
+2. `web/mvp`: complete ECS Fargate deployment, verify public health, then run real video upload/report E2E.
+3. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
+4. Keep both clients aligned to this Grapify spec and the same report contract.
