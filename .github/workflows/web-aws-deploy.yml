@@ -21,9 +21,7 @@ env:
   AWS_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIGitHubDeployRole
   ECR_REPOSITORY: fight-ai-web
   APP_RUNNER_ACCESS_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIAppRunnerECRAccessRole
-  APP_RUNNER_INSTANCE_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIAppRunnerInstanceRole
   APP_RUNNER_SERVICE_NAME: fight-ai-web
-  GEMINI_PARAMETER_NAME: /fight-ai/gemini-api-key
 
 jobs:
   deploy:
@@ -37,41 +35,6 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Provision Gemini SecureString and App Runner instance role
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "$GEMINI_API_KEY"
-          aws ssm put-parameter \
-            --name "$GEMINI_PARAMETER_NAME" \
-            --type SecureString \
-            --value "$GEMINI_API_KEY" \
-            --overwrite \
-            --region "$AWS_REGION" >/dev/null
-          PARAMETER_ARN="arn:aws:ssm:${AWS_REGION}:379549361550:parameter${GEMINI_PARAMETER_NAME}"
-          echo "GEMINI_PARAMETER_ARN=$PARAMETER_ARN" >> "$GITHUB_ENV"
-
-          cat >/tmp/apprunner-instance-trust.json <<'JSON'
-          {
-            "Version":"2012-10-17",
-            "Statement":[{"Effect":"Allow","Principal":{"Service":"tasks.apprunner.amazonaws.com"},"Action":"sts:AssumeRole"}]
-          }
-          JSON
-          if ! aws iam get-role --role-name FightAIAppRunnerInstanceRole >/dev/null 2>&1; then
-            aws iam create-role --role-name FightAIAppRunnerInstanceRole --assume-role-policy-document file:///tmp/apprunner-instance-trust.json >/dev/null
-          else
-            aws iam update-assume-role-policy --role-name FightAIAppRunnerInstanceRole --policy-document file:///tmp/apprunner-instance-trust.json >/dev/null
-          fi
-
-          cat >/tmp/apprunner-instance-policy.json <<JSON
-          {
-            "Version":"2012-10-17",
-            "Statement":[{"Effect":"Allow","Action":["ssm:GetParameter","ssm:GetParameters"],"Resource":"$PARAMETER_ARN"}]
-          }
-          JSON
-          aws iam put-role-policy --role-name FightAIAppRunnerInstanceRole --policy-name FightAIGeminiParameterRead --policy-document file:///tmp/apprunner-instance-policy.json >/dev/null
 
       - name: Login to Amazon ECR
         id: ecr
@@ -90,41 +53,55 @@ jobs:
           echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
 
       - name: Create or update App Runner service
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -euo pipefail
+          test -n "$GEMINI_API_KEY"
           SERVICE_ARN=$(aws apprunner list-services --region "$AWS_REGION" --query "ServiceSummaryList[?ServiceName=='$APP_RUNNER_SERVICE_NAME'].ServiceArn | [0]" --output text)
-          cat >/tmp/source-config.json <<JSON
-          {
-            "AuthenticationConfiguration":{"AccessRoleArn":"$APP_RUNNER_ACCESS_ROLE_ARN"},
-            "AutoDeploymentsEnabled":false,
-            "ImageRepository":{
-              "ImageIdentifier":"$IMAGE_LATEST",
-              "ImageRepositoryType":"ECR",
-              "ImageConfiguration":{
-                "Port":"3000",
-                "RuntimeEnvironmentSecrets":{"GEMINI_API_KEY":"$GEMINI_PARAMETER_ARN"},
-                "RuntimeEnvironmentVariables":{"GEMINI_MODEL":"gemini-2.5-flash"}
+
+          python - <<'PY'
+          import json, os
+          cfg = {
+            "AuthenticationConfiguration": {"AccessRoleArn": os.environ["APP_RUNNER_ACCESS_ROLE_ARN"]},
+            "AutoDeploymentsEnabled": False,
+            "ImageRepository": {
+              "ImageIdentifier": os.environ["IMAGE_LATEST"],
+              "ImageRepositoryType": "ECR",
+              "ImageConfiguration": {
+                "Port": "3000",
+                "RuntimeEnvironmentVariables": {
+                  "GEMINI_API_KEY": os.environ["GEMINI_API_KEY"],
+                  "GEMINI_MODEL": "gemini-2.5-flash"
+                }
               }
             }
           }
-          JSON
+          with open('/tmp/source-config.json','w',encoding='utf-8') as f:
+            json.dump(cfg, f)
+          PY
 
           if [ -z "$SERVICE_ARN" ] || [ "$SERVICE_ARN" = "None" ]; then
-            cat >/tmp/apprunner.json <<JSON
-          {
-            "ServiceName":"$APP_RUNNER_SERVICE_NAME",
-            "SourceConfiguration":$(cat /tmp/source-config.json),
-            "InstanceConfiguration":{"Cpu":"1 vCPU","Memory":"2 GB","InstanceRoleArn":"$APP_RUNNER_INSTANCE_ROLE_ARN"},
-            "HealthCheckConfiguration":{"Protocol":"HTTP","Path":"/api/health","Interval":10,"Timeout":5,"HealthyThreshold":1,"UnhealthyThreshold":5}
+            python - <<'PY'
+          import json, os
+          with open('/tmp/source-config.json',encoding='utf-8') as f:
+            source = json.load(f)
+          payload = {
+            "ServiceName": os.environ["APP_RUNNER_SERVICE_NAME"],
+            "SourceConfiguration": source,
+            "InstanceConfiguration": {"Cpu":"1 vCPU","Memory":"2 GB"},
+            "HealthCheckConfiguration": {"Protocol":"HTTP","Path":"/api/health","Interval":10,"Timeout":5,"HealthyThreshold":1,"UnhealthyThreshold":5}
           }
-          JSON
+          with open('/tmp/apprunner.json','w',encoding='utf-8') as f:
+            json.dump(payload, f)
+          PY
             aws apprunner create-service --region "$AWS_REGION" --cli-input-json file:///tmp/apprunner.json >/dev/null
           else
             aws apprunner update-service \
               --service-arn "$SERVICE_ARN" \
               --region "$AWS_REGION" \
               --source-configuration file:///tmp/source-config.json \
-              --instance-configuration "Cpu=1 vCPU,Memory=2 GB,InstanceRoleArn=$APP_RUNNER_INSTANCE_ROLE_ARN" >/dev/null
+              --instance-configuration "Cpu=1 vCPU,Memory=2 GB" >/dev/null
           fi
 
       - name: Show service URL and verify health
