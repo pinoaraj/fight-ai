@@ -44,6 +44,16 @@ jobs:
         run: |
           npm install --legacy-peer-deps
           npx tsc --noEmit
+      - name: Gemini secret configuration gate
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "GEMINI_API_KEY is not configured"
+            exit 1
+          fi
+          echo "[PASS] GEMINI_API_KEY is configured (value intentionally hidden)"
       - name: 0.14 feature contract checks
         working-directory: qa/full-source
         run: |
@@ -87,6 +97,8 @@ jobs:
     needs: source-validation
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
