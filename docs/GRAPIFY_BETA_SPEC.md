@@ -27,27 +27,31 @@ Current mobile beta work includes Android Expo, PDF report export/share, provide
 
 Release gate: do not call the mobile beta release-ready until source validation, demos, APK build, Android navigation and authenticated Gemini proof all pass together.
 
-## 5. Web MVP
+## 5. Web product parity — Android is the source of truth
 Branch: `web/mvp`
 PR: #2
 Stack: Next.js 15.5.24 + React 19 + TypeScript.
 
-Current MVP scope:
-- local video upload and playback
-- target fighter selection
-- boxing/kickboxing + stance selection
-- clickable report timestamps
-- strengths / priorities / opponent / tactical plan / drills
-- explicit provider + `usedInReport` state
-- demo mode clearly marked as non-AI
-- shared-backend adapter aligned with the mobile engine
-- authenticated server-side Gemini video-analysis fallback when the shared backend is not configured
-- CI with TypeScript, Next.js production build, shared-backend adapter/runtime smoke QA and Docker production build
-- `/api/health` exposing `backendConfigured`, `geminiConfigured` and `analysisReady`
+The web client is not a reduced or alternate Fight AI product. It must be a responsive browser mirror of the Android app. Android interaction flow, available analysis choices, report hierarchy, provider status, evidence, drills/visual coaching and export behavior are the product source of truth. Web-specific differences are allowed only when required by browser/platform constraints.
+
+Required web parity flow:
+1. Home/analyze entry equivalent to Android.
+2. Choose/upload sparring video and preview/play it before analysis.
+3. Select the target fighter after video selection using the same practical identity options as Android, including visual fighter selection/re-identification rather than relying only on a fixed glove-color button.
+4. Select discipline, stance/guard and the same analysis inputs/options exposed by Android.
+5. Show a dedicated processing state comparable to the Android processing screen; long analysis must not look like a frozen request.
+6. Render the same coaching report structure and semantic priorities used by Android: main takeaway, strengths, weaknesses/priorities, opponent analysis, tactical/rematch plan, next-session goals, drills, evidence and correction guidance.
+7. Timestamp evidence must seek/play the uploaded video at the corresponding moment.
+8. Provider status must explicitly show whether Gemini/Video AI/CV/Pose was connected and whether it actually participated in the current report; `usedInReport=true` remains mandatory before crediting a provider.
+9. Evidence/source details must be expandable/toggleable similar to Android.
+10. Visual Coach examples/demos linked to detected mistakes must be available from the report where Android exposes them.
+11. Export/share a PDF coaching report from the web with the same information hierarchy as Android.
+12. Preserve ES/EN behavior: one selected language only, with no duplicated mixed-language analysis.
+13. Sessions/history/progress/profile surfaces should follow Android as those mobile features stabilize; web should not invent a conflicting navigation model.
+
+Current implemented web pieces already include local video upload/playback, basic target selection, boxing/kickboxing + stance, clickable timestamps, strengths/priorities/opponent/tactical plan/drills, explicit provider + `usedInReport`, server-side Gemini fallback, CI and `/api/health`. These are an interim subset and must be expanded/reworked to Android parity before the web beta is considered feature-complete.
 
 The CI runtime smoke boots the built Next.js server against a local mock Fight AI backend, validates `/api/health`, sends the multipart analysis contract through `/api/analyze`, and verifies provider attribution, summary, timestamp evidence and drill normalization before the Docker gate.
-
-Latest Web MVP CI on commit `ba6682f2` is green for TypeScript, Next.js production build, shared-backend adapter/runtime smoke QA and Docker build. PR #2 remains open, draft and mergeable.
 
 Next.js was moved from 15.5.2 to maintenance-security release 15.5.24 before public deployment.
 
@@ -58,8 +62,10 @@ If the shared backend is absent, the web server may use authenticated Gemini dir
 
 The fallback prompt forbids invented exact punch counts and asks for visible evidence, tactical hypotheses, at most three main priorities, actionable drills and timestamps only when supported.
 
+For production-scale sparring uploads, the web path must not depend on holding a single synchronous HTTP request open while loading the entire file into Next.js memory. Large-video ingestion must move to an asynchronous/private upload path with explicit processing state and recoverable job status.
+
 ## 7. Web input contract
-Multipart fields aligned with mobile include:
+Multipart/shared fields aligned with mobile include:
 - `video`
 - `language`
 - `sport`
@@ -67,31 +73,38 @@ Multipart fields aligned with mobile include:
 - `glove_color` when known
 - `stance`
 
-Additional re-identification fields can be added without changing the analysis contract: `top_color`, `relative_height`, `build`, and fighter anchor coordinates.
+Additional re-identification fields should support Android-equivalent fighter anchoring: `top_color`, `relative_height`, `build`, fighter anchor coordinates/selection and any persistent visual descriptor required by the shared backend.
 
 ## 8. Visual coaching
-Detected mistakes should link to correction visuals. Product direction supports short motion demos, angle/trajectory graphics and simplified animated teaching examples. Visuals must correspond to the detected issue rather than generic boxing clips.
+Detected mistakes should link to correction visuals. Product direction supports short motion demos, angle/trajectory graphics and simplified animated teaching examples. Visuals must correspond to the detected issue rather than generic boxing clips. Web and Android should expose the same correction intent even when playback UI differs by platform.
 
 ## 9. QA matrix
 Before release, validate together:
+- Android↔Web feature-parity checklist
 - video upload/playback
+- target fighter selection after upload
+- visual fighter identity/re-identification persistence
+- discipline/stance/analysis options parity
+- dedicated processing state
 - timestamp seeking
-- fighter identity persistence
 - analysis rendering
+- main takeaway / strengths / priorities / opponent / tactical plan / next goals parity
 - asynchronous backend polling and legacy fallback
-- shared-backend multipart adapter/runtime smoke
+- shared-backend adapter/runtime smoke
 - authenticated Gemini fallback
 - ES/EN consistency
 - provider labels + `usedInReport`
-- CV/Pose/Video-AI source labels
+- CV/Pose/Video-AI source labels and evidence toggle
 - drills and visual examples
-- PDF/export path
+- PDF export/share
 - Android real-app navigation
+- responsive web navigation aligned with Android
 - web TypeScript + production build
 - web Docker build
 - public `/api/health`
 - deployed `/api/analyze` authenticated Gemini smoke with `provider: Gemini` and `usedInReport: true`
-- real sparring upload/report E2E
+- real large sparring upload/report E2E
+- user-visible non-JSON handling for ALB/HTTP errors
 
 Regression footage should stay outside normal public Git history whenever practical.
 
@@ -113,13 +126,13 @@ Current web production architecture:
 
 The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
 
-AWS compute is activated and the deployment now succeeds through GitHub OIDC, ECR image push, ALB creation, ECS Fargate service deployment and public health verification in `sa-east-1`.
+AWS compute is activated and deployment succeeds through GitHub OIDC, ECR image push, ALB creation, ECS Fargate service deployment and public health verification in `sa-east-1`.
 
 Current public beta endpoint: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
 
 Verified health response reports `ok: true`, `service: fight-ai-web`, `geminiConfigured: true`, `analysisReady: true`, and `providerAttributionPolicy: usedInReport-required`.
 
-The deployment workflow now also generates a tiny synthetic MP4 and posts it through the deployed `/api/analyze` endpoint. The gate passes only if a real authenticated Gemini response returns `provider: Gemini`, `usedInReport: true`, and a non-empty summary. This closes the distinction between “Gemini configured” and “Gemini actually participated”.
+A deployed Gemini smoke must use a real sparring proof clip and pass only when the public `/api/analyze` response returns live Gemini attribution, `usedInReport: true`, a non-empty summary and timestamp evidence. A missing fixture or infrastructure-only health pass does not satisfy this gate.
 
 ### Gemini runtime secret status
 AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionRequiredException` for this account. For the beta deployment only, the GitHub Actions `GEMINI_API_KEY` secret is injected as a server-side ECS task environment variable. It is never committed to Git and is never sent to browser JavaScript. Migrate it to Secrets Manager/SSM when those services become available for the account.
@@ -127,8 +140,8 @@ AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionR
 ### Next production hardening
 - add HTTPS with ACM certificate + port 443 before general public launch
 - move Gemini key to AWS managed secret storage
-- move uploaded video storage to private S3 with short-lived URLs and retention/deletion policy
-- add CloudWatch logs/metrics
+- implement private asynchronous large-video upload/job processing (prefer private S3 + short-lived URLs/retention policy once account access permits)
+- add CloudWatch logs/metrics before external beta debugging
 - deploy the shared CV/Pose backend and set `FIGHT_AI_API_URL`
 
 ## 11. Security / privacy
@@ -142,7 +155,8 @@ AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionR
 - no invented statistics or certainty
 
 ## 12. Current workstreams
-1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: keep CI + runtime adapter QA green, keep ECS/ALB deployment healthy, and complete the deployed Gemini smoke plus a real sparring upload/report E2E.
-3. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
-4. Keep both clients aligned to this Grapify spec and the same report contract.
+1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates and preserve Android as the canonical product-flow reference.
+2. `web/mvp`: replace the simplified MVP presentation with Android-parity upload → fighter selection → analysis options → processing → report → evidence/visuals → PDF flow.
+3. Harden large-video ingestion so real sparring files do not rely on one memory-heavy synchronous request; add persistent runtime logging.
+4. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
+5. Keep both clients aligned to this Grapify spec and the same report contract.
