@@ -23,7 +23,7 @@ env:
   APP_RUNNER_ACCESS_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIAppRunnerECRAccessRole
   APP_RUNNER_INSTANCE_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIAppRunnerInstanceRole
   APP_RUNNER_SERVICE_NAME: fight-ai-web
-  GEMINI_SECRET_NAME: fight-ai/gemini-api-key
+  GEMINI_PARAMETER_NAME: /fight-ai/gemini-api-key
 
 jobs:
   deploy:
@@ -38,20 +38,20 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Provision Gemini runtime secret and App Runner instance role
+      - name: Provision Gemini SecureString and App Runner instance role
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -euo pipefail
           test -n "$GEMINI_API_KEY"
-
-          if aws secretsmanager describe-secret --secret-id "$GEMINI_SECRET_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            aws secretsmanager put-secret-value --secret-id "$GEMINI_SECRET_NAME" --secret-string "$GEMINI_API_KEY" --region "$AWS_REGION" >/dev/null
-          else
-            aws secretsmanager create-secret --name "$GEMINI_SECRET_NAME" --secret-string "$GEMINI_API_KEY" --region "$AWS_REGION" >/dev/null
-          fi
-          SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$GEMINI_SECRET_NAME" --region "$AWS_REGION" --query ARN --output text)
-          echo "GEMINI_SECRET_ARN=$SECRET_ARN" >> "$GITHUB_ENV"
+          aws ssm put-parameter \
+            --name "$GEMINI_PARAMETER_NAME" \
+            --type SecureString \
+            --value "$GEMINI_API_KEY" \
+            --overwrite \
+            --region "$AWS_REGION" >/dev/null
+          PARAMETER_ARN="arn:aws:ssm:${AWS_REGION}:379549361550:parameter${GEMINI_PARAMETER_NAME}"
+          echo "GEMINI_PARAMETER_ARN=$PARAMETER_ARN" >> "$GITHUB_ENV"
 
           cat >/tmp/apprunner-instance-trust.json <<'JSON'
           {
@@ -59,7 +59,6 @@ jobs:
             "Statement":[{"Effect":"Allow","Principal":{"Service":"tasks.apprunner.amazonaws.com"},"Action":"sts:AssumeRole"}]
           }
           JSON
-
           if ! aws iam get-role --role-name FightAIAppRunnerInstanceRole >/dev/null 2>&1; then
             aws iam create-role --role-name FightAIAppRunnerInstanceRole --assume-role-policy-document file:///tmp/apprunner-instance-trust.json >/dev/null
           else
@@ -69,10 +68,10 @@ jobs:
           cat >/tmp/apprunner-instance-policy.json <<JSON
           {
             "Version":"2012-10-17",
-            "Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue"],"Resource":"$SECRET_ARN"}]
+            "Statement":[{"Effect":"Allow","Action":["ssm:GetParameter","ssm:GetParameters"],"Resource":"$PARAMETER_ARN"}]
           }
           JSON
-          aws iam put-role-policy --role-name FightAIAppRunnerInstanceRole --policy-name FightAIGeminiSecretRead --policy-document file:///tmp/apprunner-instance-policy.json >/dev/null
+          aws iam put-role-policy --role-name FightAIAppRunnerInstanceRole --policy-name FightAIGeminiParameterRead --policy-document file:///tmp/apprunner-instance-policy.json >/dev/null
 
       - name: Login to Amazon ECR
         id: ecr
@@ -103,7 +102,7 @@ jobs:
               "ImageRepositoryType":"ECR",
               "ImageConfiguration":{
                 "Port":"3000",
-                "RuntimeEnvironmentSecrets":{"GEMINI_API_KEY":"$GEMINI_SECRET_ARN"},
+                "RuntimeEnvironmentSecrets":{"GEMINI_API_KEY":"$GEMINI_PARAMETER_ARN"},
                 "RuntimeEnvironmentVariables":{"GEMINI_MODEL":"gemini-2.5-flash"}
               }
             }
@@ -139,7 +138,10 @@ jobs:
               echo "App Runner status: $STATUS"
               echo "Fight AI URL: https://$URL"
               if [ "$STATUS" = "RUNNING" ]; then
-                curl --fail --retry 12 --retry-delay 10 "https://$URL/api/health"
+                HEALTH=$(curl --fail --retry 12 --retry-delay 10 "https://$URL/api/health")
+                echo "$HEALTH"
+                echo "$HEALTH" | grep -q '"analysisReady":true'
+                echo "$HEALTH" | grep -q '"geminiConfigured":true'
                 exit 0
               fi
               if [ "$STATUS" = "CREATE_FAILED" ] || [ "$STATUS" = "DELETE_FAILED" ]; then exit 1; fi
