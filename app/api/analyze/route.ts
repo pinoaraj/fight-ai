@@ -84,28 +84,132 @@ async function requestJson(url: string, init?: RequestInit) {
   return data;
 }
 
-export async function POST(req: NextRequest) {
-  const backend = process.env.FIGHT_AI_API_URL?.replace(/\/$/, '');
-  if (!backend) {
-    return NextResponse.json({ error: 'Backend de Fight AI no conectado en esta web todavía.' }, { status: 503 });
-  }
+function cleanGeminiJson(text: string) {
+  const trimmed = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
+  return JSON.parse(trimmed) as Record<string, unknown>;
+}
 
+async function analyzeWithGemini(source: FormData) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
+
+  const video = source.get('video');
+  if (!(video instanceof File)) throw new Error('No se recibió un video válido.');
+  const mimeType = video.type || 'video/mp4';
+  const size = video.size;
+  if (!size) throw new Error('El video está vacío.');
+
+  const start = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+    method: 'POST',
+    headers: {
+      'x-goog-api-key': apiKey,
+      'X-Goog-Upload-Protocol': 'resumable',
+      'X-Goog-Upload-Command': 'start',
+      'X-Goog-Upload-Header-Content-Length': String(size),
+      'X-Goog-Upload-Header-Content-Type': mimeType,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ file: { display_name: video.name || 'fight-ai-sparring.mp4' } }),
+    cache: 'no-store',
+  });
+  if (!start.ok) throw new Error(`Gemini no pudo iniciar la carga (${start.status}).`);
+  const uploadUrl = start.headers.get('x-goog-upload-url');
+  if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga.');
+
+  const bytes = await video.arrayBuffer();
+  const uploaded = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Length': String(size),
+      'X-Goog-Upload-Offset': '0',
+      'X-Goog-Upload-Command': 'upload, finalize',
+    },
+    body: bytes,
+    cache: 'no-store',
+  });
+  if (!uploaded.ok) throw new Error(`Gemini no pudo cargar el video (${uploaded.status}).`);
+  const fileInfo = await uploaded.json() as { file?: { name?: string; uri?: string; state?: string } };
+  const fileName = fileInfo.file?.name;
+  const fileUri = fileInfo.file?.uri;
+  if (!fileName || !fileUri) throw new Error('Gemini no devolvió referencia del video.');
+
+  let state = fileInfo.file?.state || 'PROCESSING';
+  for (let i = 0; i < 40 && state !== 'ACTIVE'; i += 1) {
+    if (state === 'FAILED') throw new Error('Gemini no pudo procesar el video.');
+    await sleep(1500);
+    const status = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}`, {
+      headers: { 'x-goog-api-key': apiKey },
+      cache: 'no-store',
+    });
+    if (!status.ok) throw new Error(`No se pudo consultar el estado del video en Gemini (${status.status}).`);
+    const statusJson = await status.json() as { state?: string };
+    state = statusJson.state || 'PROCESSING';
+  }
+  if (state !== 'ACTIVE') throw new Error('Gemini todavía no termina de preparar el video.');
+
+  const target = String(source.get('glove_color') || source.get('athlete_marker') || 'peleador seleccionado');
+  const sport = String(source.get('sport') || 'boxing');
+  const stance = String(source.get('stance') || 'unknown');
+  const prompt = `Analiza este video de sparring de ${sport}. Evalúa SOLO al peleador objetivo: ${target}. Guardia declarada: ${stance}. Responde en español como coach técnico. No inventes conteos exactos de golpes ni estadísticas que el video no permita verificar. Separa observaciones visibles de hipótesis tácticas. Devuelve SOLO JSON válido con esta forma: {"summary":"...","strengths":["..."],"priorities":["..."],"opponent":["..."],"plan":["..."],"drills":["..."],"evidence":[{"time":"MM:SS","title":"...","observation":"...","correction":"..."}]}. Usa timestamps solo cuando tengas evidencia visible. Máximo 3 prioridades principales y recomendaciones accionables.`;
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const generated = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }, { file_data: { mime_type: mimeType, file_uri: fileUri } }] }],
+      generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
+    }),
+    cache: 'no-store',
+  });
+  const generatedText = await generated.text();
+  if (!generated.ok) throw new Error(`Gemini rechazó el análisis (${generated.status}).`);
+  const generatedJson = JSON.parse(generatedText) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  const text = generatedJson.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('').trim();
+  if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
+  const parsed = cleanGeminiJson(text);
+
+  const stringList = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string') as string[] : [];
+  const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.filter(x => x && typeof x === 'object').map(x => {
+    const item = x as Record<string, unknown>;
+    return {
+      time: typeof item.time === 'string' ? item.time : '00:00',
+      title: typeof item.title === 'string' ? item.title : 'Evidencia',
+      observation: typeof item.observation === 'string' ? item.observation : '',
+      correction: typeof item.correction === 'string' ? item.correction : '',
+    };
+  }) : [];
+
+  return {
+    mode: 'real' as const,
+    provider: 'Gemini',
+    usedInReport: true,
+    summary: typeof parsed.summary === 'string' ? parsed.summary : 'Análisis completado con Gemini.',
+    strengths: stringList(parsed.strengths),
+    priorities: stringList(parsed.priorities).slice(0, 3),
+    opponent: stringList(parsed.opponent),
+    plan: stringList(parsed.plan),
+    drills: stringList(parsed.drills),
+    evidence,
+  };
+}
+
+export async function POST(req: NextRequest) {
   try {
     const source = await req.formData();
-    const health = await requestJson(`${backend}/health`) as { asyncJobs?: boolean };
+    const backend = process.env.FIGHT_AI_API_URL?.replace(/\/$/, '');
 
+    if (!backend) {
+      return NextResponse.json(await analyzeWithGemini(source));
+    }
+
+    const health = await requestJson(`${backend}/health`) as { asyncJobs?: boolean };
     if (health.asyncJobs) {
       const created = await requestJson(`${backend}/jobs/analyze`, { method: 'POST', body: source }) as { jobId?: string };
       if (!created.jobId) throw new Error('El motor no devolvió un jobId.');
-
       const deadline = Date.now() + 25 * 60 * 1000;
       while (Date.now() < deadline) {
         await sleep(2200);
-        const job = await requestJson(`${backend}/jobs/${encodeURIComponent(created.jobId)}`) as {
-          status?: string;
-          error?: string;
-          result?: { report?: unknown };
-        };
+        const job = await requestJson(`${backend}/jobs/${encodeURIComponent(created.jobId)}`) as { status?: string; error?: string; result?: { report?: unknown } };
         if (job.status === 'COMPLETED') {
           if (!job.result?.report) throw new Error('El análisis terminó sin reporte.');
           return NextResponse.json(normalizeReport(job.result.report));
@@ -119,7 +223,7 @@ export async function POST(req: NextRequest) {
     if (!legacy.report) throw new Error('El motor no devolvió reporte.');
     return NextResponse.json(normalizeReport(legacy.report));
   } catch (error) {
-    console.error('Fight AI web proxy error', error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'No se pudo conectar con el motor de análisis.' }, { status: 502 });
+    console.error('Fight AI web analysis error', error);
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'No se pudo completar el análisis.' }, { status: 502 });
   }
 }
