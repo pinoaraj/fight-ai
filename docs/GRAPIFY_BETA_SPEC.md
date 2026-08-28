@@ -51,10 +51,12 @@ Current MVP scope:
 - production Docker image for cloud deployment
 - `/api/health` runtime endpoint for preview/cloud checks
 
-Current web QA state:
-- TypeScript: previously PASS; rerunning after shared-backend integration
-- Next.js production build: previously PASS; rerunning after shared-backend integration
-- Docker image build: active CI release gate
+Current web QA state on commit `6b6ad1bbcfd40f797b9fd415ebcc6bb94c40f35d`:
+- dependency install: PASS
+- TypeScript: PASS
+- Next.js production build: PASS
+- production Docker image build: PASS
+- PR #2: open, draft, mergeable with `main`
 
 The web client must not duplicate analysis logic. It sends video + target identity to the same backend used by mobile and normalizes the shared `Analysis` object only for presentation.
 
@@ -107,7 +109,7 @@ Regression footage should remain outside normal Git history whenever practical. 
 
 ## 9. Web deployment strategy
 ### Test/preview
-The web is considered preview-ready after TypeScript + production build + Docker build are green. A preview must clearly show when the shared backend is disconnected and must never label demo data as AI output.
+The code is now build-ready for preview because TypeScript + production build + Docker build are green. A preview must clearly show when the shared backend is disconnected and must never label demo data as AI output.
 
 ### AWS target
 Preferred target: private Amazon ECR image + AWS App Runner service. GitHub Actions authenticates through AWS/GitHub OIDC rather than permanent AWS access keys.
@@ -154,5 +156,5 @@ Production is not considered live until the public/test URL returns the real web
 
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: complete shared-backend CI, validate Docker image, obtain an authorized AWS preview environment, then run real upload/report E2E.
+2. `web/mvp`: AWS authorization is now the next external gate for a testable cloud URL; after authorization, activate the prepared OIDC/ECR/App Runner deployment and run real upload/report E2E.
 3. Keep both clients aligned to this Grapify spec and the same analysis contract.
