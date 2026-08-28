@@ -17,12 +17,38 @@ capture_hierarchy(){
       adb exec-out cat /data/local/tmp/fightai-home.xml 2>/dev/null > "$target" || true
     fi
     if grep -q '<?xml' "$target" 2>/dev/null; then return 0; fi
-    # Fallback for emulator images where uiautomator only supports stdout.
     adb exec-out uiautomator dump /dev/tty 2>/dev/null | sed -n '/<?xml/,$p' > "$target" || true
     if grep -q '<?xml' "$target" 2>/dev/null; then return 0; fi
     sleep 3
   done
   return 1
+}
+
+launch_app(){
+  adb shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
+  adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
+}
+
+recover_system_ui_anr(){
+  local xml="$OUT/fightai-home.xml"
+  for attempt in 1 2 3; do
+    if ! grep -Eq "System UI isn.t responding|android:id/aerr_wait|com.android.systemui" "$xml" 2>/dev/null; then
+      return 0
+    fi
+    log "INFO: emulator System UI ANR detected; choosing Wait and retrying app launch (attempt $attempt/3)"
+    # Pixel 7 test profile is 1080x2400. This lands on the ANR dialog's Wait button.
+    adb shell input tap 540 1336 >/dev/null 2>&1 || true
+    sleep 5
+    launch_app
+    sleep 8
+    adb exec-out screencap -p > "$OUT/01-home-retry-$attempt.png" || true
+    adb logcat -d > "$OUT/logcat-home.txt" || true
+    capture_hierarchy || true
+  done
+  if grep -Eq "System UI isn.t responding|android:id/aerr_wait|com.android.systemui" "$xml" 2>/dev/null; then
+    log "FAIL: emulator System UI ANR remained after recovery retries"
+    exit 14
+  fi
 }
 
 log "Fight AI Android virtual-agent QA starting"
@@ -31,7 +57,7 @@ adb wait-for-device
 adb shell input keyevent 82 || true
 adb shell pm clear "$APP_ID" || true
 adb logcat -c || true
-adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
+launch_app
 sleep 8
 
 adb exec-out screencap -p > "$OUT/01-home.png"
@@ -41,6 +67,8 @@ if ! capture_hierarchy; then
   log "FAIL: UI hierarchy capture was empty after retries"
   exit 9
 fi
+
+recover_system_ui_anr
 
 if grep -Eq "FATAL EXCEPTION|AndroidRuntime.*FATAL" "$OUT/logcat-home.txt"; then
   log "FAIL: fatal Android exception detected after launch"
@@ -54,17 +82,15 @@ else
   exit 11
 fi
 
-# Language contract: first screen must not contain duplicated Spanish+English body copy.
 if grep -q "Crea un perfil" "$OUT/fightai-home.xml" && grep -q "Create a local beta profile" "$OUT/fightai-home.xml"; then
   log "FAIL: mixed-language duplicate onboarding copy"
   exit 12
 fi
 log "PASS: no duplicated ES/EN onboarding body"
 
-# Exercise process restart resilience.
 adb shell am force-stop "$APP_ID"
-adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
-sleep 3
+launch_app
+sleep 4
 adb exec-out screencap -p > "$OUT/02-relaunch.png"
 adb logcat -d > "$OUT/logcat-relaunch.txt"
 if grep -Eq "FATAL EXCEPTION|AndroidRuntime.*FATAL" "$OUT/logcat-relaunch.txt"; then
