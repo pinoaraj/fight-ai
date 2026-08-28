@@ -181,28 +181,29 @@ jobs:
           print('[PASS] source archive checksum', digest)
           PY
           tar -xzf /tmp/fightai.tar.gz -C qa/full-source
-      - name: Build real Expo Android APK
+      - name: Build self-contained Expo Android APK
         working-directory: qa/full-source
         env:
+          NODE_ENV: production
           EXPO_PUBLIC_VISION_API_URL: http://10.0.2.2:8787
         run: |
           npm install --legacy-peer-deps
           npx expo prebuild --platform android --no-install
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
       - name: Run real Fight AI app on accelerated Android 35
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_7
-          disable-animations: false
+          disable-animations: true
           script: |
             set -eu
             mkdir -p qa-artifacts
-            test -f qa/full-source/android/app/build/outputs/apk/debug/app-debug.apk
-            adb install -r qa/full-source/android/app/build/outputs/apk/debug/app-debug.apk
+            test -f qa/full-source/android/app/build/outputs/apk/release/app-release.apk
+            adb install -r qa/full-source/android/app/build/outputs/apk/release/app-release.apk
             chmod +x qa/android_virtual_agent.sh
             qa/android_virtual_agent.sh qa-artifacts
       - name: Upload real Android QA artifacts
@@ -212,4 +213,4 @@ jobs:
           name: fight-ai-real-android-qa
           path: |
             qa-artifacts/
-            qa/full-source/android/app/build/outputs/apk/debug/app-debug.apk
+            qa/full-source/android/app/build/outputs/apk/release/app-release.apk
