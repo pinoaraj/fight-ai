@@ -18,7 +18,7 @@ permissions:
   id-token: write
 
 env:
-  DEPLOY_REGION: us-east-1
+  DEPLOY_REGION: sa-east-1
   ECR_REGION: us-east-2
   AWS_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIGitHubDeployRole
   ECR_REGISTRY: 379549361550.dkr.ecr.us-east-2.amazonaws.com
