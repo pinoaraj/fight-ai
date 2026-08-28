@@ -41,29 +41,46 @@ Stack: Next.js 15 + React 19 + TypeScript.
 Current MVP scope:
 - local video upload and playback
 - target fighter selection
+- boxing/kickboxing + stance selection
 - clickable report timestamps
 - strengths / priorities / opponent / tactical plan / drills
 - explicit provider + `usedInReport` state
 - demo mode clearly marked as non-AI
-- `/api/analyze` proxy ready to reuse the shared Fight AI backend
-- separate CI with TypeScript and production build
+- shared-backend adapter aligned with the mobile engine
+- separate CI with TypeScript, production build and Docker build
 - production Docker image for cloud deployment
+- `/api/health` runtime endpoint for preview/cloud checks
 
 Current web QA state:
-- TypeScript: PASS
-- Next.js production build: PASS
-- Docker image build: added as a CI release gate
+- TypeScript: previously PASS; rerunning after shared-backend integration
+- Next.js production build: previously PASS; rerunning after shared-backend integration
+- Docker image build: active CI release gate
 
-The web client must not duplicate analysis logic. It should send video + target identity to the backend and render the normalized report contract.
+The web client must not duplicate analysis logic. It sends video + target identity to the same backend used by mobile and normalizes the shared `Analysis` object only for presentation.
 
-## 6. Backend boundary
-Web environment variable: `FIGHT_AI_API_URL`.
-Optional server-to-server token: `FIGHT_AI_WEB_TOKEN`.
+## 6. Shared backend contract
+Web server configuration:
+- `FIGHT_AI_API_URL`
+- optional `FIGHT_AI_WEB_TOKEN`
+
 Gemini keys stay server-side only; never expose them in browser JavaScript or mobile bundles.
 
-Expected endpoint:
-`POST /analyze`
-Multipart form containing the sparring video and target fighter descriptor. The backend returns the normalized report JSON.
+Backend discovery/flow mirrors the mobile client:
+1. `GET /health`
+2. if `asyncJobs=true`: `POST /jobs/analyze`, then poll `GET /jobs/{jobId}` until `COMPLETED` or `FAILED`
+3. otherwise fallback to legacy `POST /analyze`
+
+Multipart fields currently aligned with mobile include:
+- `video`
+- `language`
+- `sport`
+- `athlete_marker`
+- `glove_color` when known
+- `stance`
+
+Additional visual re-identification fields supported by the mobile contract can be added to the web selector without changing the backend: `top_color`, `relative_height`, `build`, and fighter anchor coordinates.
+
+The web adapter reads the backend `Analysis` structure (`mainTakeaway`, strengths, weaknesses, opponent analysis, rematch plan, drills and timestamps) and renders it into the web report. `realVision.videoAI.usedInReport` is the only accepted signal for displaying a Video-AI provider as having participated in the report.
 
 ## 7. Visual coaching
 Detected mistakes should link to correction visuals. Current product direction supports short motion demos, angle/trajectory graphics and simplified animated teaching examples. Visuals must correspond to the detected issue rather than generic boxing clips.
@@ -74,6 +91,7 @@ Before release, validate together:
 - timestamp seeking
 - fighter identity persistence
 - analysis rendering
+- asynchronous job polling and legacy fallback
 - ES/EN language consistency
 - provider labels and `usedInReport`
 - CV/Pose/Video-AI source labels
@@ -82,13 +100,14 @@ Before release, validate together:
 - Android real-app navigation
 - web TypeScript + production build
 - web production Docker build
+- web `/api/health`
 - authenticated Gemini regression on real sparring footage
 
 Regression footage should remain outside normal Git history whenever practical. Public repositories must not become a permanent store for private sparring videos.
 
 ## 9. Web deployment strategy
 ### Test/preview
-The web is considered preview-ready after production build + Docker build are green. A preview must clearly show when the shared backend is disconnected and must never label demo data as AI output.
+The web is considered preview-ready after TypeScript + production build + Docker build are green. A preview must clearly show when the shared backend is disconnected and must never label demo data as AI output.
 
 ### AWS target
 Preferred target: private Amazon ECR image + AWS App Runner service. GitHub Actions authenticates through AWS/GitHub OIDC rather than permanent AWS access keys.
@@ -115,6 +134,7 @@ No Gmail password, AWS password, static AWS access key or Gemini key belongs in 
 ## 10. AWS production architecture
 - web runtime: AWS App Runner, port 3000
 - image registry: private Amazon ECR
+- health check target: `/api/health`
 - analysis API: shared Fight AI backend
 - future production video storage: private S3 + short-lived access + explicit retention/deletion policy
 - secrets: server-side only
@@ -134,5 +154,5 @@ Production is not considered live until the public/test URL returns the real web
 
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: keep CI green, validate production Docker image, connect shared backend, produce a testable URL, then activate AWS deployment through authorized OIDC.
+2. `web/mvp`: complete shared-backend CI, validate Docker image, obtain an authorized AWS preview environment, then run real upload/report E2E.
 3. Keep both clients aligned to this Grapify spec and the same analysis contract.
