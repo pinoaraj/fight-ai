@@ -90,6 +90,7 @@ Before release, validate together:
 - web TypeScript + production build
 - web Docker build
 - public `/api/health`
+- deployed `/api/analyze` authenticated Gemini smoke with `provider: Gemini` and `usedInReport: true`
 - real sparring upload/report E2E
 
 Regression footage should stay outside normal public Git history whenever practical.
@@ -112,9 +113,13 @@ Current web production architecture:
 
 The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
 
-AWS compute is now activated. The latest deployment successfully authenticated with GitHub OIDC, validated ECS/EC2 availability in `sa-east-1`, logged into ECR, built the production container and pushed image `ba6682f2` to `fight-ai-web`.
+AWS compute is activated and the deployment now succeeds through GitHub OIDC, ECR image push, ALB creation, ECS Fargate service deployment and public health verification in `sa-east-1`.
 
-Current external deployment gate: ALB creation stopped because the GitHub deploy role lacks the read-only permission `ec2:DescribeAccountAttributes`, which ELB internally requires during `CreateLoadBalancer`. `infra/aws/bootstrap-ecs-fargate.ps1` now includes that permission. Re-running the bootstrap once with the existing local AWS profile will update the role; no long-lived credentials are added to GitHub or source control.
+Current public beta endpoint: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
+
+Verified health response reports `ok: true`, `service: fight-ai-web`, `geminiConfigured: true`, `analysisReady: true`, and `providerAttributionPolicy: usedInReport-required`.
+
+The deployment workflow now also generates a tiny synthetic MP4 and posts it through the deployed `/api/analyze` endpoint. The gate passes only if a real authenticated Gemini response returns `provider: Gemini`, `usedInReport: true`, and a non-empty summary. This closes the distinction between “Gemini configured” and “Gemini actually participated”.
 
 ### Gemini runtime secret status
 AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionRequiredException` for this account. For the beta deployment only, the GitHub Actions `GEMINI_API_KEY` secret is injected as a server-side ECS task environment variable. It is never committed to Git and is never sent to browser JavaScript. Migrate it to Secrets Manager/SSM when those services become available for the account.
@@ -138,6 +143,6 @@ AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionR
 
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: keep CI + runtime adapter QA green; apply the current IAM read-only ALB dependency, complete ECS Fargate deployment, verify public health, then run real video upload/report E2E.
+2. `web/mvp`: keep CI + runtime adapter QA green, keep ECS/ALB deployment healthy, and complete the deployed Gemini smoke plus a real sparring upload/report E2E.
 3. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
 4. Keep both clients aligned to this Grapify spec and the same report contract.
