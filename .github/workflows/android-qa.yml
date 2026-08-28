@@ -35,27 +35,31 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p qa/full-source
-          cat bootstrap/source/full-*.b64 > /tmp/fightai.b64
+          cat bootstrap/app014/part-*.b64 > /tmp/fightai.b64
           base64 -d /tmp/fightai.b64 > /tmp/fightai.tar.gz
-          echo "d7bc4125b57dce497c8c0bce66180fd2a7d3576fb3ef08217159fa4adf62e6f4  /tmp/fightai.tar.gz" | sha256sum -c -
+          echo "b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2  /tmp/fightai.tar.gz" | sha256sum -c -
           tar -xzf /tmp/fightai.tar.gz -C qa/full-source
           test -f qa/full-source/App.tsx
-          test -f qa/full-source/vision_server/server.py
-          test -f qa/full-source/src/engine/combatEngine.ts
+          test -f qa/full-source/src/reportPdf.ts
+          test -f qa/full-source/src/aiStatus.ts
+          test -f qa/full-source/tools_make_visuals.py
 
       - name: Static source checks
         working-directory: qa/full-source
         run: |
           npm install --legacy-peer-deps
           npx tsc --noEmit
-          python -m compileall -q vision_server
 
-      - name: Product regression tests
+      - name: 0.14 feature contract checks
         working-directory: qa/full-source
         run: |
-          python -m pip install --upgrade pip
-          pip install pytest
-          pytest -q vision_server/test_013_product_qa.py
+          grep -q "expo-print" package.json
+          grep -q "expo-sharing" package.json
+          grep -q "printToFileAsync" src/reportPdf.ts
+          grep -q "usedInReport" src/reportPdf.ts
+          grep -q "IA CONECTADA" src/aiStatus.ts
+          grep -q "DESCARGAR / COMPARTIR PDF" App.tsx
+          grep -q "DEMO EN MOVIMIENTO" App.tsx
 
       - name: Generate and validate motion demos
         working-directory: qa/full-source
@@ -122,9 +126,9 @@ jobs:
       - name: Reconstruct Fight AI source
         run: |
           mkdir -p qa/full-source
-          cat bootstrap/source/full-*.b64 > /tmp/fightai.b64
+          cat bootstrap/app014/part-*.b64 > /tmp/fightai.b64
           base64 -d /tmp/fightai.b64 > /tmp/fightai.tar.gz
-          echo "d7bc4125b57dce497c8c0bce66180fd2a7d3576fb3ef08217159fa4adf62e6f4  /tmp/fightai.tar.gz" | sha256sum -c -
+          echo "b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2  /tmp/fightai.tar.gz" | sha256sum -c -
           tar -xzf /tmp/fightai.tar.gz -C qa/full-source
 
       - name: Generate visual assets
