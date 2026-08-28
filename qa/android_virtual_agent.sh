@@ -8,22 +8,37 @@ mkdir -p "$OUT"
 stamp(){ date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 log(){ echo "[$(stamp)] $*" | tee -a "$OUT/agent-report.txt"; }
 
+capture_hierarchy(){
+  local target="$OUT/fightai-home.xml"
+  : > "$target"
+  for attempt in 1 2 3 4; do
+    adb shell rm -f /data/local/tmp/fightai-home.xml >/dev/null 2>&1 || true
+    if adb shell uiautomator dump /data/local/tmp/fightai-home.xml >/dev/null 2>&1; then
+      adb exec-out cat /data/local/tmp/fightai-home.xml 2>/dev/null > "$target" || true
+    fi
+    if grep -q '<?xml' "$target" 2>/dev/null; then return 0; fi
+    # Fallback for emulator images where uiautomator only supports stdout.
+    adb exec-out uiautomator dump /dev/tty 2>/dev/null | sed -n '/<?xml/,$p' > "$target" || true
+    if grep -q '<?xml' "$target" 2>/dev/null; then return 0; fi
+    sleep 3
+  done
+  return 1
+}
+
 log "Fight AI Android virtual-agent QA starting"
 
 adb wait-for-device
 adb shell input keyevent 82 || true
 adb shell pm clear "$APP_ID" || true
+adb logcat -c || true
 adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
-sleep 5
+sleep 8
 
-# Android 35 may deny adb pull from /sdcard even when uiautomator can write there.
-# Stream the hierarchy over stdout instead so the QA gate does not depend on shared-storage permissions.
-adb exec-out uiautomator dump /dev/tty 2>/dev/null | sed -n '/<?xml/,$p' > "$OUT/fightai-home.xml"
 adb exec-out screencap -p > "$OUT/01-home.png"
 adb logcat -d > "$OUT/logcat-home.txt"
 
-if ! test -s "$OUT/fightai-home.xml"; then
-  log "FAIL: UI hierarchy capture was empty"
+if ! capture_hierarchy; then
+  log "FAIL: UI hierarchy capture was empty after retries"
   exit 9
 fi
 
@@ -49,7 +64,7 @@ log "PASS: no duplicated ES/EN onboarding body"
 # Exercise process restart resilience.
 adb shell am force-stop "$APP_ID"
 adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null
-sleep 2
+sleep 3
 adb exec-out screencap -p > "$OUT/02-relaunch.png"
 adb logcat -d > "$OUT/logcat-relaunch.txt"
 if grep -Eq "FATAL EXCEPTION|AndroidRuntime.*FATAL" "$OUT/logcat-relaunch.txt"; then
