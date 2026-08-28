@@ -7,17 +7,42 @@ $DeployRole = 'FightAIGitHubDeployRole'
 $AppRunnerAccessRole = 'FightAIAppRunnerECRAccessRole'
 $EcrRepo = 'fight-ai-web'
 
+function Quote-Arg([string]$arg) {
+  if ($arg -notmatch '[\s"]') { return $arg }
+  return '"' + ($arg -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1') + '"'
+}
+
 function Invoke-Aws {
   param(
     [Parameter(Mandatory=$true)][string[]]$Arguments,
     [switch]$AllowFailure
   )
-  $output = & aws @Arguments 2>&1
-  $code = $LASTEXITCODE
+
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'aws.exe'
+  $psi.Arguments = (($Arguments | ForEach-Object { Quote-Arg $_ }) -join ' ')
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $psi
+  [void]$process.Start()
+  $stdout = $process.StandardOutput.ReadToEnd()
+  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  $code = $process.ExitCode
+
   if ($code -ne 0 -and -not $AllowFailure) {
-    throw "AWS CLI failed ($code): aws $($Arguments -join ' ')`n$($output -join "`n")"
+    throw "AWS CLI failed ($code): aws $($Arguments -join ' ')`n$stderr"
   }
-  return [pscustomobject]@{ ExitCode = $code; Output = ($output -join "`n") }
+
+  return [pscustomobject]@{
+    ExitCode = $code
+    Output = $stdout.Trim()
+    Error = $stderr.Trim()
+  }
 }
 
 $identity = Invoke-Aws -Arguments @('sts','get-caller-identity','--profile',$Profile,'--output','json')
@@ -28,6 +53,7 @@ if (-not $AccountId) { throw 'AWS login/profile fight-ai is not available.' }
 $ProviderArn = "arn:aws:iam::${AccountId}:oidc-provider/token.actions.githubusercontent.com"
 $providerCheck = Invoke-Aws -Arguments @('iam','get-open-id-connect-provider','--open-id-connect-provider-arn',$ProviderArn,'--profile',$Profile) -AllowFailure
 if ($providerCheck.ExitCode -ne 0) {
+  Write-Host 'Creating GitHub OIDC provider...'
   Invoke-Aws -Arguments @('iam','create-open-id-connect-provider','--url','https://token.actions.githubusercontent.com','--client-id-list','sts.amazonaws.com','--profile',$Profile) | Out-Null
 }
 
@@ -53,6 +79,7 @@ $trust | Set-Content -Encoding ascii $trustPath
 
 $roleCheck = Invoke-Aws -Arguments @('iam','get-role','--role-name',$DeployRole,'--profile',$Profile) -AllowFailure
 if ($roleCheck.ExitCode -ne 0) {
+  Write-Host "Creating IAM role $DeployRole..."
   Invoke-Aws -Arguments @('iam','create-role','--role-name',$DeployRole,'--assume-role-policy-document',"file://$trustPath",'--profile',$Profile) | Out-Null
 } else {
   Invoke-Aws -Arguments @('iam','update-assume-role-policy','--role-name',$DeployRole,'--policy-document',"file://$trustPath",'--profile',$Profile) | Out-Null
@@ -86,6 +113,7 @@ $runnerTrustPath = Join-Path $env:TEMP 'fight-ai-apprunner-trust.json'
 $runnerTrust | Set-Content -Encoding ascii $runnerTrustPath
 $runnerRoleCheck = Invoke-Aws -Arguments @('iam','get-role','--role-name',$AppRunnerAccessRole,'--profile',$Profile) -AllowFailure
 if ($runnerRoleCheck.ExitCode -ne 0) {
+  Write-Host "Creating IAM role $AppRunnerAccessRole..."
   Invoke-Aws -Arguments @('iam','create-role','--role-name',$AppRunnerAccessRole,'--assume-role-policy-document',"file://$runnerTrustPath",'--profile',$Profile) | Out-Null
 } else {
   Invoke-Aws -Arguments @('iam','update-assume-role-policy','--role-name',$AppRunnerAccessRole,'--policy-document',"file://$runnerTrustPath",'--profile',$Profile) | Out-Null
@@ -94,10 +122,10 @@ Invoke-Aws -Arguments @('iam','attach-role-policy','--role-name',$AppRunnerAcces
 
 $repoCheck = Invoke-Aws -Arguments @('ecr','describe-repositories','--repository-names',$EcrRepo,'--region',$Region,'--profile',$Profile) -AllowFailure
 if ($repoCheck.ExitCode -ne 0) {
+  Write-Host "Creating ECR repository $EcrRepo..."
   Invoke-Aws -Arguments @('ecr','create-repository','--repository-name',$EcrRepo,'--image-scanning-configuration','scanOnPush=true','--region',$Region,'--profile',$Profile) | Out-Null
 }
 
-# Verify every required resource before claiming success.
 Invoke-Aws -Arguments @('iam','get-role','--role-name',$DeployRole,'--profile',$Profile) | Out-Null
 Invoke-Aws -Arguments @('iam','get-role','--role-name',$AppRunnerAccessRole,'--profile',$Profile) | Out-Null
 Invoke-Aws -Arguments @('ecr','describe-repositories','--repository-names',$EcrRepo,'--region',$Region,'--profile',$Profile) | Out-Null
