@@ -1,20 +1,43 @@
-# Fight AI — AI Combat Sparring Analyst
+# Fight AI Web
 
-Mobile-first boxing and kickboxing video-analysis project.
+Web client for the Fight AI combat-sparring analysis platform.
 
-## Current baseline
+## Current status
 
-Beta 0.13.0 focuses on:
-- fighter identity / re-identification
-- CV + pose evidence
-- optional Gemini video review
-- concise coach-style analysis
-- opponent tendencies and matchup strategy
-- timestamped evidence
-- drills and visual correction examples
+Working branch: `web/mvp`
 
-## QA policy
+End-of-day status: `docs/STATUS_2026-08-28.md`
 
-No release should be treated as test-ready until automated QA passes. Private sparring footage must not be committed to this public repository.
+Living product/architecture spec: `docs/GRAPIFY_BETA_SPEC.md`
 
-See `docs/GRAPIFY_BETA_SPEC.md` and the GitHub Actions workflows for current architecture and QA gates.
+## Current web baseline
+
+- Next.js 15.5.24 + React 19 + TypeScript
+- local video upload/playback
+- target fighter selection
+- boxing/kickboxing + stance inputs
+- timestamped coaching report
+- strengths, priorities, opponent analysis, tactical plan and drills
+- explicit provider attribution with `usedInReport`
+- shared-backend adapter
+- server-side Gemini fallback
+- CI + Docker build
+- AWS deploy through GitHub OIDC
+- ECR + ECS/Fargate + ALB
+- public health endpoint
+
+## Product rule
+
+The Android client remains the source of truth for product flow and report hierarchy. The web client must reach Android parity rather than evolve into a separate product.
+
+## Next
+
+The web code should be migrated from this branch into the dedicated repository:
+
+`pinoaraj/fight-ai-web`
+
+After migration, update AWS GitHub OIDC trust to the new repository subject before enabling deploys from the new repo.
+
+## Security
+
+Do not commit private sparring footage, Gemini keys, AWS credentials or other secrets.
