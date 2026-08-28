@@ -2,6 +2,15 @@ name: Web AWS Deploy
 
 on:
   workflow_dispatch:
+  push:
+    branches: [web/mvp]
+    paths:
+      - '.github/workflows/web-aws-deploy.yml'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'package.json'
+      - 'tsconfig.json'
+      - 'app/**'
 
 permissions:
   contents: read
@@ -21,14 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure AWS credentials through GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@v2.1.6
 
       - name: Build and push web image
         env:
@@ -59,7 +68,8 @@ jobs:
                 "ImageConfiguration": {"Port": "3000"}
               }
             },
-            "InstanceConfiguration": {"Cpu": "1 vCPU", "Memory": "2 GB"}
+            "InstanceConfiguration": {"Cpu": "1 vCPU", "Memory": "2 GB"},
+            "HealthCheckConfiguration": {"Protocol": "HTTP", "Path": "/api/health", "Interval": 10, "Timeout": 5, "HealthyThreshold": 1, "UnhealthyThreshold": 5}
           }
           JSON
             aws apprunner create-service --region "$AWS_REGION" --cli-input-json file:///tmp/apprunner.json
@@ -70,14 +80,20 @@ jobs:
       - name: Show service URL
         run: |
           set -euo pipefail
-          for i in $(seq 1 40); do
+          for i in $(seq 1 60); do
             SERVICE_ARN=$(aws apprunner list-services --region "$AWS_REGION" --query "ServiceSummaryList[?ServiceName=='$APP_RUNNER_SERVICE_NAME'].ServiceArn | [0]" --output text)
             if [ -n "$SERVICE_ARN" ] && [ "$SERVICE_ARN" != "None" ]; then
               STATUS=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --region "$AWS_REGION" --query 'Service.Status' --output text)
               URL=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --region "$AWS_REGION" --query 'Service.ServiceUrl' --output text)
               echo "App Runner status: $STATUS"
               echo "Fight AI URL: https://$URL"
-              if [ "$STATUS" = "RUNNING" ]; then exit 0; fi
+              if [ "$STATUS" = "RUNNING" ]; then
+                curl --fail --retry 12 --retry-delay 10 "https://$URL/api/health"
+                exit 0
+              fi
+              if [ "$STATUS" = "CREATE_FAILED" ] || [ "$STATUS" = "DELETE_FAILED" ]; then
+                exit 1
+              fi
             fi
             sleep 15
           done
