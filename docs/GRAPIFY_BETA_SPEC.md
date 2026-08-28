@@ -47,6 +47,8 @@ Current MVP scope:
 
 The CI runtime smoke boots the built Next.js server against a local mock Fight AI backend, validates `/api/health`, sends the multipart analysis contract through `/api/analyze`, and verifies provider attribution, summary, timestamp evidence and drill normalization before the Docker gate.
 
+Latest Web MVP CI on commit `ba6682f2` is green for TypeScript, Next.js production build, shared-backend adapter/runtime smoke QA and Docker build. PR #2 remains open, draft and mergeable.
+
 Next.js was moved from 15.5.2 to maintenance-security release 15.5.24 before public deployment.
 
 ## 6. Shared backend and Gemini contract
@@ -110,7 +112,9 @@ Current web production architecture:
 
 The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
 
-AWS compute remains externally blocked at account level: read-only probes across major commercial regions return `OptInRequired` for EC2. OIDC and ECR are functioning; no long-lived AWS access keys are used. Public deployment resumes once the account's advanced/computing services are activated.
+AWS compute is now activated. The latest deployment successfully authenticated with GitHub OIDC, validated ECS/EC2 availability in `sa-east-1`, logged into ECR, built the production container and pushed image `ba6682f2` to `fight-ai-web`.
+
+Current external deployment gate: ALB creation stopped because the GitHub deploy role lacks the read-only permission `ec2:DescribeAccountAttributes`, which ELB internally requires during `CreateLoadBalancer`. `infra/aws/bootstrap-ecs-fargate.ps1` now includes that permission. Re-running the bootstrap once with the existing local AWS profile will update the role; no long-lived credentials are added to GitHub or source control.
 
 ### Gemini runtime secret status
 AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionRequiredException` for this account. For the beta deployment only, the GitHub Actions `GEMINI_API_KEY` secret is injected as a server-side ECS task environment variable. It is never committed to Git and is never sent to browser JavaScript. Migrate it to Secrets Manager/SSM when those services become available for the account.
@@ -134,6 +138,6 @@ AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionR
 
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: keep CI + runtime adapter QA green; once AWS compute is activated, complete ECS Fargate deployment, verify public health, then run real video upload/report E2E.
+2. `web/mvp`: keep CI + runtime adapter QA green; apply the current IAM read-only ALB dependency, complete ECS Fargate deployment, verify public health, then run real video upload/report E2E.
 3. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
 4. Keep both clients aligned to this Grapify spec and the same report contract.
