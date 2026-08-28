@@ -1,0 +1,85 @@
+name: Web AWS Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-2
+  AWS_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIGitHubDeployRole
+  ECR_REPOSITORY: fight-ai-web
+  APP_RUNNER_ACCESS_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIAppRunnerECRAccessRole
+  APP_RUNNER_SERVICE_NAME: fight-ai-web
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push web image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          IMAGE_SHA="$REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA}"
+          IMAGE_LATEST="$REGISTRY/$ECR_REPOSITORY:latest"
+          docker build -t "$IMAGE_SHA" -t "$IMAGE_LATEST" .
+          docker push "$IMAGE_SHA"
+          docker push "$IMAGE_LATEST"
+          echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
+
+      - name: Create or redeploy App Runner service
+        run: |
+          set -euo pipefail
+          SERVICE_ARN=$(aws apprunner list-services --region "$AWS_REGION" --query "ServiceSummaryList[?ServiceName=='$APP_RUNNER_SERVICE_NAME'].ServiceArn | [0]" --output text)
+          if [ -z "$SERVICE_ARN" ] || [ "$SERVICE_ARN" = "None" ]; then
+            cat > /tmp/apprunner.json <<JSON
+          {
+            "ServiceName": "$APP_RUNNER_SERVICE_NAME",
+            "SourceConfiguration": {
+              "AuthenticationConfiguration": {"AccessRoleArn": "$APP_RUNNER_ACCESS_ROLE_ARN"},
+              "AutoDeploymentsEnabled": false,
+              "ImageRepository": {
+                "ImageIdentifier": "$IMAGE_LATEST",
+                "ImageRepositoryType": "ECR",
+                "ImageConfiguration": {"Port": "3000"}
+              }
+            },
+            "InstanceConfiguration": {"Cpu": "1 vCPU", "Memory": "2 GB"}
+          }
+          JSON
+            aws apprunner create-service --region "$AWS_REGION" --cli-input-json file:///tmp/apprunner.json
+          else
+            aws apprunner start-deployment --service-arn "$SERVICE_ARN" --region "$AWS_REGION"
+          fi
+
+      - name: Show service URL
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            SERVICE_ARN=$(aws apprunner list-services --region "$AWS_REGION" --query "ServiceSummaryList[?ServiceName=='$APP_RUNNER_SERVICE_NAME'].ServiceArn | [0]" --output text)
+            if [ -n "$SERVICE_ARN" ] && [ "$SERVICE_ARN" != "None" ]; then
+              STATUS=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --region "$AWS_REGION" --query 'Service.Status' --output text)
+              URL=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --region "$AWS_REGION" --query 'Service.ServiceUrl' --output text)
+              echo "App Runner status: $STATUS"
+              echo "Fight AI URL: https://$URL"
+              if [ "$STATUS" = "RUNNING" ]; then exit 0; fi
+            fi
+            sleep 15
+          done
+          echo 'App Runner did not reach RUNNING within the workflow window.' >&2
+          exit 1
