@@ -47,6 +47,12 @@ Current MVP scope:
 - demo mode clearly marked as non-AI
 - `/api/analyze` proxy ready to reuse the shared Fight AI backend
 - separate CI with TypeScript and production build
+- production Docker image for cloud deployment
+
+Current web QA state:
+- TypeScript: PASS
+- Next.js production build: PASS
+- Docker image build: added as a CI release gate
 
 The web client must not duplicate analysis logic. It should send video + target identity to the backend and render the normalized report contract.
 
@@ -75,42 +81,58 @@ Before release, validate together:
 - PDF/export path
 - Android real-app navigation
 - web TypeScript + production build
+- web production Docker build
 - authenticated Gemini regression on real sparring footage
 
 Regression footage should remain outside normal Git history whenever practical. Public repositories must not become a permanent store for private sparring videos.
 
 ## 9. Web deployment strategy
-### Preview
-A temporary preview can be deployed independently of AWS after CI is green. The preview must clearly mark demo/non-connected backend states.
+### Test/preview
+The web is considered preview-ready after production build + Docker build are green. A preview must clearly show when the shared backend is disconnected and must never label demo data as AI output.
 
-### AWS production
-Preferred authentication is GitHub Actions OIDC to an AWS IAM role. Do **not** paste AWS access keys into chat and do not commit long-lived credentials.
+### AWS target
+Preferred target: private Amazon ECR image + AWS App Runner service. GitHub Actions authenticates through AWS/GitHub OIDC rather than permanent AWS access keys.
 
-Recommended target architecture:
-- frontend: AWS Amplify Hosting or CloudFront-backed Next.js deployment
-- analysis API: existing Fight AI backend endpoint
-- uploaded videos: private S3 bucket with short-lived presigned URLs
-- secrets: AWS Secrets Manager / CI secret store
-- logs/metrics: CloudWatch
-- retention: explicit deletion policy for uploaded sparring footage
+Prepared repository assets:
+- `Dockerfile`
+- `.dockerignore`
+- `infra/aws/web-aws-deploy.template.yml` (inactive deployment template)
 
-Required deployment values when production is enabled:
-- AWS account/role setup for GitHub OIDC
-- AWS region
-- deployment target (Amplify or equivalent)
-- backend public/private URL
-- optional domain name
+The deployment template remains inactive until the AWS account authorizes the repository and the required repository variables are configured. It must first be tested as a manual deployment before any automatic production deploy is enabled.
 
-## 10. Security / privacy
+Required non-secret GitHub repository variables:
+- `AWS_REGION`
+- `AWS_ROLE_ARN`
+- `AWS_ECR_REPOSITORY`
+- `AWS_APP_RUNNER_SERVICE_ARN`
+
+Runtime server configuration:
+- `FIGHT_AI_API_URL`
+- optional `FIGHT_AI_WEB_TOKEN`
+
+No Gmail password, AWS password, static AWS access key or Gemini key belongs in source control or browser code.
+
+## 10. AWS production architecture
+- web runtime: AWS App Runner, port 3000
+- image registry: private Amazon ECR
+- analysis API: shared Fight AI backend
+- future production video storage: private S3 + short-lived access + explicit retention/deletion policy
+- secrets: server-side only
+- logs/metrics: cloud runtime observability
+
+Production is not considered live until the public/test URL returns the real web build and backend/provider behavior is validated end-to-end.
+
+## 11. Security / privacy
 - no Gemini key in client code
 - no AWS static access keys in repository
+- no personal passwords used for deployment
 - uploaded sparring video private by default
-- use temporary/presigned video access
+- use temporary/presigned video access in production
 - minimize retention
 - provider attribution must be truthful
 - no invented statistics or certainty
 
-## 11. Current workstreams
+## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates.
-2. `web/mvp`: get CI green, connect shared backend, produce a testable preview URL, then prepare AWS deployment.
+2. `web/mvp`: keep CI green, validate production Docker image, connect shared backend, produce a testable URL, then activate AWS deployment through authorized OIDC.
 3. Keep both clients aligned to this Grapify spec and the same analysis contract.
