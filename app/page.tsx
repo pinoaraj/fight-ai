@@ -35,11 +35,19 @@ function seconds(time: string) {
   return parts.length === 2 ? (parts[0] || 0) * 60 + (parts[1] || 0) : Number(time) || 0;
 }
 
+function frameTarget(node: HTMLVideoElement) {
+  const duration = Number.isFinite(node.duration) ? node.duration : 0;
+  return duration > 0 ? Math.min(Math.max(duration * 0.035, 1), Math.min(5, Math.max(.1, duration - .2))) : 1;
+}
+
 async function captureFrame(src: string, at: number) {
   return new Promise<string>((resolve) => {
     const v = document.createElement('video');
     v.src = src; v.muted = true; v.preload = 'auto'; v.playsInline = true;
+    let settled = false;
     const finish = () => {
+      if (settled) return;
+      settled = true;
       try {
         const canvas = document.createElement('canvas');
         canvas.width = Math.min(v.videoWidth || 960, 960);
@@ -49,9 +57,15 @@ async function captureFrame(src: string, at: number) {
       } catch { resolve(''); }
       v.removeAttribute('src'); v.load();
     };
-    v.addEventListener('loadedmetadata', () => { v.currentTime = Math.min(Math.max(0.08, at), Math.max(0.08, v.duration - .08)); }, { once: true });
-    v.addEventListener('seeked', finish, { once: true });
+    const seek = () => {
+      const max = Number.isFinite(v.duration) && v.duration > .2 ? v.duration - .1 : Math.max(.1, at);
+      try { v.currentTime = Math.min(Math.max(.1, at), max); } catch { finish(); }
+    };
+    v.addEventListener('loadeddata', seek, { once: true });
+    v.addEventListener('seeked', () => window.setTimeout(finish, 120), { once: true });
+    v.addEventListener('canplay', () => { if (v.currentTime > .05) window.setTimeout(finish, 100); }, { once: true });
     v.addEventListener('error', () => resolve(''), { once: true });
+    window.setTimeout(() => { if (!settled && v.readyState >= 2) finish(); }, 5000);
   });
 }
 
@@ -109,19 +123,38 @@ export default function Home() {
   function showDemo() { setFrames({}); setReport(demo); window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
   function toggleFocus(id: string) { setFocuses(x => x.includes(id) ? x.filter(v => v !== id) : [...x, id]); }
   function primePreview(node: HTMLVideoElement) {
-    node.pause();
-    const duration = Number.isFinite(node.duration) ? node.duration : 0;
-    const target = duration > 0 ? Math.min(Math.max(duration * 0.035, 0.8), Math.min(4, Math.max(0, duration - .15))) : .8;
-    const done = () => { setPreviewReady(true); setPreviewTime(node.currentTime || target); };
-    node.addEventListener('seeked', done, { once: true });
-    try { node.currentTime = target; } catch { setPreviewReady(node.readyState >= 2); }
+    node.pause(); node.muted = true;
+    const target = frameTarget(node);
+    const markReady = () => {
+      if (node.readyState >= 2 && node.videoWidth > 0 && node.videoHeight > 0) {
+        setPreviewReady(true); setPreviewTime(node.currentTime || target);
+      }
+    };
+    const seek = () => {
+      if (node.currentTime < .05) {
+        try { node.currentTime = target; } catch { /* user can still scrub manually */ }
+      } else markReady();
+    };
+    if (node.readyState >= 2) seek(); else {
+      node.addEventListener('loadeddata', seek, { once: true });
+      node.addEventListener('canplay', seek, { once: true });
+    }
+    node.addEventListener('seeked', () => window.setTimeout(markReady, 80), { once: true });
+    window.setTimeout(markReady, 2500);
   }
-  function toggleMarking() {
+  async function toggleMarking() {
     const node = videoRef.current;
     if (node) {
+      node.muted = true;
+      if (node.readyState < 2) {
+        try { await node.play(); await new Promise(resolve => window.setTimeout(resolve, 180)); } catch { /* continue with manual seek */ }
+      }
       node.pause();
-      if (!previewReady || node.currentTime < .05) primePreview(node);
-      else setPreviewTime(node.currentTime);
+      if (node.currentTime < .05) {
+        try { node.currentTime = frameTarget(node); await new Promise(resolve => window.setTimeout(resolve, 120)); } catch { /* keep controls available */ }
+      }
+      if (node.readyState >= 2 && node.videoWidth > 0) setPreviewReady(true);
+      setPreviewTime(node.currentTime || frameTarget(node));
     }
     setMarking(x => !x);
   }
@@ -156,42 +189,24 @@ export default function Home() {
         anchor_x: anchor ? anchor.x.toFixed(2) : '', anchor_y: anchor ? anchor.y.toFixed(2) : '',
         anchor_size: anchor ? anchor.size.toFixed(2) : '', anchor_time: anchor ? previewTime.toFixed(2) : '',
       };
-
       const healthResponse = await fetch('/api/health', { cache: 'no-store' });
       const health = healthResponse.ok ? await healthResponse.json() as { backendConfigured?: boolean } : {};
       let response: Response;
-
       if (health.backendConfigured) {
-        const body = new FormData();
-        body.append('video', video);
+        const body = new FormData(); body.append('video', video);
         for (const [key, value] of Object.entries(context)) body.append(key, value);
         response = await fetch('/api/analyze', { method: 'POST', body });
       } else {
-        setStageFloor(0);
-        const uploadedResponse = await fetch('/api/upload', {
-          method: 'POST',
-          headers: {
-            'Content-Type': video.type || 'video/mp4',
-            'x-fight-ai-name': encodeURIComponent(video.name || 'fight-ai-sparring.mp4'),
-            'x-fight-ai-size': String(video.size),
-          },
-          body: video,
-        });
+        const uploadedResponse = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4', 'x-fight-ai-name': encodeURIComponent(video.name || 'fight-ai-sparring.mp4'), 'x-fight-ai-size': String(video.size) }, body: video });
         const uploadedRaw = await uploadedResponse.text();
         let uploaded: { fileName?: string; fileUri?: string; mimeType?: string; error?: string } | null = null;
         try { uploaded = uploadedRaw ? JSON.parse(uploadedRaw) : null; } catch { uploaded = null; }
         if (!uploadedResponse.ok || !uploaded?.fileName || !uploaded.fileUri) throw new Error(uploaded?.error || `La carga del video terminó con HTTP ${uploadedResponse.status}.`);
-
         setStageFloor(1);
-        response = await fetch('/api/analyze-uploaded', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...context, fileName: uploaded.fileName, fileUri: uploaded.fileUri, mimeType: uploaded.mimeType || video.type || 'video/mp4' }),
-        });
+        response = await fetch('/api/analyze-uploaded', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...context, fileName: uploaded.fileName, fileUri: uploaded.fileUri, mimeType: uploaded.mimeType || video.type || 'video/mp4' }) });
         setStageFloor(2);
       }
-
-      const data = await parseResponse(response);
-      setStageFloor(5); setReport(data);
+      const data = await parseResponse(response); setStageFloor(5); setReport(data);
       window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
     } catch (e) { setError(e instanceof Error ? e.message : 'Error inesperado.'); }
     finally { setBusy(false); }
@@ -204,41 +219,33 @@ export default function Home() {
       node.pause();
       const max = Number.isFinite(node.duration) && node.duration > .2 ? node.duration - .08 : target;
       node.currentTime = Math.min(Math.max(.08, target), max);
-      const done = () => node.play().catch(() => undefined);
-      node.addEventListener('seeked', done, { once: true });
+      node.addEventListener('seeked', () => node.play().catch(() => undefined), { once: true });
     };
-    if (node.readyState < 1) node.addEventListener('loadedmetadata', seek, { once: true }); else seek();
+    if (node.readyState < 2) node.addEventListener('loadeddata', seek, { once: true }); else seek();
   }
 
   return <main>
     <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className="status"><span className="dot"/> MOTOR WEB</div></header>
     <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, describe quién es y dile al coach virtual qué quieres mejorar. El reporte debe explicar patrones, causas, consecuencias y correcciones con evidencia.</p><div className="heroActions"><a className="cta" href="#analyze">ANALIZAR VIDEO</a><button data-testid="demo-report-button" onClick={showDemo}>VER REPORTE DEMO</button></div></div><div className="heroCard"><span className="heroMetric">01</span><b>OJO CLÍNICO, NO CONSEJOS GENÉRICOS</b><p>Patrón visible → causa → consecuencia táctica → corrección → drill → evidencia.</p></div></section>
     <section className="workflowStrip"><span className="active">1 · Video</span><span>2 · Marcar peleador</span><span>3 · Características</span><span>4 · Foco del coach</span><span>5 · Reporte</span></section>
-
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Selecciona y revisa tu sparring" />
       <input data-testid="video-input" ref={inputRef} hidden type="file" accept="video/*" onChange={e => selectVideo(e.target.files?.[0] || null)} />
-      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="uploadIcon">＋</span><strong>SUBIR SPARRING</strong><span>MP4, MOV o compatible</span></button> : <div className="videoWrap"><div className={`videoStage ${marking?'isMarking':''}`}><video data-testid="video-preview" ref={videoRef} src={videoUrl} controls={!marking} playsInline preload="auto" onLoadedMetadata={e=>primePreview(e.currentTarget)} onSeeked={e=>{if(!marking)setPreviewTime(e.currentTarget.currentTime)}}/>{anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" data-testid="marker-overlay" onClick={setAnchorFromEvent}><span>Haz clic sobre el centro del peleador</span></div>}</div><div className="previewHint" data-testid="preview-status"><b>{previewReady?'FRAME VISIBLE LISTO':'CARGANDO FRAME…'}</b><span>{previewReady?'Mueve la barra del video al momento donde mejor se vea el peleador y luego presiona “Marcar peleador”.':'Fight AI está buscando automáticamente un frame visible para que no marques sobre una pantalla negra.'}</span></div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
-
+      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="uploadIcon">＋</span><strong>SUBIR SPARRING</strong><span>MP4, MOV o compatible</span></button> : <div className="videoWrap"><div className={`videoStage ${marking?'isMarking':''}`}><video data-testid="video-preview" ref={videoRef} src={videoUrl} controls={!marking} playsInline muted preload="auto" onLoadedMetadata={e=>primePreview(e.currentTarget)} onLoadedData={e=>primePreview(e.currentTarget)} onCanPlay={e=>{if(e.currentTarget.currentTime>.05){setPreviewReady(true);setPreviewTime(e.currentTarget.currentTime)}}} onSeeked={e=>{if(e.currentTarget.readyState>=2){setPreviewReady(true);setPreviewTime(e.currentTarget.currentTime)}}}/>{anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" data-testid="marker-overlay" onClick={setAnchorFromEvent}><span>Haz clic sobre el centro del peleador</span></div>}</div><div className="previewHint" data-testid="preview-status"><b>{previewReady?'FRAME VISIBLE LISTO':'DECODIFICANDO FRAME…'}</b><span>{previewReady?'Usa la barra del video para elegir el momento más claro y luego marca al peleador.':'Fight AI espera datos de imagen reales; si el archivo es grande puedes mover la barra manualmente o presionar “Marcar peleador” para forzar la decodificación.'}</span></div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
       <SectionTitle n="02" title="SELECCIONA AL PELEADOR" subtitle="Pausa en un frame claro y circula al peleador como en Android" extraClass="fighterTitle" />
-      <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video||!previewReady} onClick={toggleMarking}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>setAnchor(null)}>Limpiar</button>}</div>
+      <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video} onClick={toggleMarking}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>setAnchor(null)}>Limpiar</button>}</div>
       {anchor && <><div className="anchorConfirmed">✓ Peleador marcado en {Math.floor(previewTime/60)}:{String(Math.floor(previewTime%60)).padStart(2,'0')}</div><label className="rangeLabel">Tamaño del círculo<input type="range" min="12" max="48" value={anchor.size} onChange={e=>setAnchor({...anchor,size:Number(e.target.value)})}/></label></>}
-
       <SectionTitle n="03" title="CARACTERÍSTICAS" subtitle="Ayuda al motor a mantener la identidad" extraClass="optionsTitle" />
       <div className="identityGrid"><label>Color de guantes<input data-testid="glove-color" value={gloveColor} onChange={e=>setGloveColor(e.target.value)} placeholder="Ej. rojos"/></label><label>Ropa / polera<input value={topColor} onChange={e=>setTopColor(e.target.value)} placeholder="Ej. polera negra"/></label><label>Altura relativa<select value={relativeHeight} onChange={e=>setRelativeHeight(e.target.value)}><option value="">No sé</option><option value="shorter">Más bajo</option><option value="similar">Similar</option><option value="taller">Más alto</option></select></label><label>Contextura<select value={build} onChange={e=>setBuild(e.target.value)}><option value="">No sé</option><option value="slim">Delgada</option><option value="medium">Media / atlética</option><option value="stocky">Robusta</option></select></label><label className="wide">Otras características<textarea data-testid="fighter-notes" value={fighterNotes} onChange={e=>setFighterNotes(e.target.value)} placeholder="Ej. más bajo, pelo corto, shorts negros, protector rojo…"/></label></div>
-
       <SectionTitle n="04" title="FOCO DEL COACH" subtitle="Dile qué quieres que priorice" extraClass="optionsTitle" />
       <div className="focusGrid">{focusOptions.map(([id,label])=><button data-testid={`focus-${id}`} key={id} className={focuses.includes(id)?'active':''} onClick={()=>toggleFocus(id)}>{focuses.includes(id)?'✓ ':''}{label}</button>)}</div>
       <label className="customFocus">Objetivo personalizado<textarea value={customFocus} onChange={e=>setCustomFocus(e.target.value)} placeholder="Ej. quiero saber por qué me conectan al entrar, cómo cerrar mejor la distancia y qué estrategia usar contra este rival."/></label>
-
       <SectionTitle n="05" title="CONFIGURACIÓN" subtitle="Contexto del análisis" extraClass="optionsTitle" />
       <div className="analysisOptions"><label>Disciplina<select data-testid="sport-select" value={sport} onChange={e=>setSport(e.target.value as 'boxing'|'kickboxing')}><option value="boxing">Boxeo</option><option value="kickboxing">Kickboxing</option></select></label><label>Guardia<select data-testid="stance-select" value={stance} onChange={e=>setStance(e.target.value as 'orthodox'|'southpaw'|'switch')}><option value="orthodox">Ortodoxa</option><option value="southpaw">Zurda</option><option value="switch">Switch</option></select></label><label>Idioma<select value={language} onChange={e=>setLanguage(e.target.value as 'es'|'en')}><option value="es">Español</option><option value="en">English</option></select></label></div>
-
       <button data-testid="analyze-button" className="primary" disabled={busy||!video} onClick={analyze}>{busy?'ANALIZANDO SPARRING…':'ANALIZAR SPARRING'}<span>→</span></button>
       {busy && <div className="processingCard" data-testid="processing-state"><div className="spinner"/><div><b>{processingSteps[processingStep]}</b><span>{elapsed<60?`${elapsed}s transcurridos`:`${Math.floor(elapsed/60)}m ${elapsed%60}s transcurridos`} · el archivo se carga una sola vez y luego Gemini analiza la referencia preparada.</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
       {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span></div>}
     </aside>
-
     <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>06</span><div className="emptyRing">◎</div><h2>Tu coaching aparecerá aquí</h2><p>El reporte mostrará si Gemini participó, prioridades, rival, estrategia, drills, videos de corrección y evidencia reproducible.</p></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc}/>}</section></section>
     <footer>Fight AI · Herramienta de apoyo técnico. La decisión final pertenece al atleta y su entrenador.</footer>
   </main>;
@@ -250,42 +257,31 @@ function ReportView({report,onJumpMain,frames,mediaSrc}:{report:Report;onJumpMai
   const footworkIssue = report.priorities.some(x=>/foot|pie|pies|base|piv|ángulo|distancia|entrada|salida/i.test(x));
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(report.evidence[0] || null);
   const evidenceVideoRef = useRef<HTMLVideoElement>(null);
-
   useEffect(() => { setSelectedEvidence(report.evidence[0] || null); }, [report]);
-
   function playEvidence(e: Evidence) {
     setSelectedEvidence(e);
     const node = evidenceVideoRef.current;
     if (node && mediaSrc) {
       const target = seconds(e.time);
       const seek = () => {
-        node.pause();
-        const max = Number.isFinite(node.duration) && node.duration > .2 ? node.duration - .08 : target;
+        node.pause(); const max = Number.isFinite(node.duration) && node.duration > .2 ? node.duration - .08 : target;
         node.currentTime = Math.min(Math.max(.08, target), max);
-        const done = () => node.play().catch(() => undefined);
-        node.addEventListener('seeked', done, { once: true });
+        node.addEventListener('seeked', () => window.setTimeout(() => node.play().catch(() => undefined), 80), { once: true });
       };
-      if (node.readyState < 1) node.addEventListener('loadedmetadata', seek, { once: true }); else seek();
+      if (node.readyState < 2) node.addEventListener('loadeddata', seek, { once: true }); else seek();
     }
     if (report.mode === 'real') onJumpMain(e.time);
   }
-
   return <div data-testid="report-content">
     <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small></div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>EXPORTAR REPORTE A PDF + IMÁGENES</button></div></div>
-
-    {report.mode === 'demo' && <section className="demoVideoSection" data-testid="demo-video-section"><div><span className="eyebrow">VIDEO DE DEMOSTRACIÓN</span><h3>Prueba cómo funciona la evidencia antes de subir tu sparring</h3><p>Este clip corto está incluido solo para demostrar selección, timestamps y reproducción. El reporte de ejemplo no afirma que sea un análisis real de este clip.</p></div><video data-testid="demo-video" src="/api/demo-video" controls muted playsInline preload="metadata"/></section>}
-
+    {report.mode === 'demo' && <section className="demoVideoSection" data-testid="demo-video-section"><div><span className="eyebrow">VIDEO DE DEMOSTRACIÓN</span><h3>Prueba cómo funciona la evidencia antes de subir tu sparring</h3><p>Este clip corto demuestra selección, timestamps y reproducción. El reporte de ejemplo no afirma que sea un análisis real de este clip.</p></div><video data-testid="demo-video" src="/api/demo-video" controls muted playsInline preload="auto"/></section>}
     <div className="takeaway"><span>DIAGNÓSTICO PRINCIPAL</span><p>{report.summary}</p></div>
     <div className="reportNav"><a href="#priorities">Prioridades</a><a href="#opponent">Rival</a><a href="#visual-coach">Visual Coach</a><a href="#evidence">Evidencia</a></div>
     <div className="grid3"><Card title="FORTALEZAS QUE DEBES CONSERVAR" items={report.strengths} tone="good"/><Card title="PRIORIDADES CLÍNICAS" items={report.priorities} tone="focus" id="priorities"/><Card title="LECTURA DEL RIVAL" items={report.opponent} tone="neutral" id="opponent"/></div>
     <div className="strategy"><div><h3>PLAN TÁCTICO</h3>{report.plan.map((x,i)=><p key={x+i}><b>0{i+1}</b><span>{x}</span></p>)}</div><div><h3>DRILLS PRESCRITOS</h3>{report.drills.map((x,i)=><p key={x+i}><b>0{i+1}</b><span>{x}</span></p>)}</div></div>
-
     <section className="visualCoach" id="visual-coach"><div><span className="eyebrow">VISUAL COACH</span><h3>Corrección ligada al problema detectado</h3><p>{report.priorities[0]||'Mantén una base recuperable antes de atacar.'}</p></div><div className="coachDiagram"><span className="fighterDot">TÚ</span><i className="lineArrow">→</i><span className="targetDot">RIVAL</span><b>ENTRA CON BASE · TERMINA EQUILIBRADO · SAL POR ÁNGULO ↗</b></div></section>
-
     <section className="printDiagrams" data-testid="printable-diagrams"><div className="lessonHead"><span className="eyebrow">DIAGRAMAS DEL COACH · INCLUIDOS EN PDF</span><h3>Tres referencias visuales para llevar al entrenamiento</h3></div><div className="diagramGrid"><TechniqueDiagram kind="entry" title="1 · Entrada con base"/><TechniqueDiagram kind="guard" title="2 · Recupera guardia"/><TechniqueDiagram kind="pivot" title="3 · Sal por ángulo"/></div></section>
-
     <section className="lessonSection"><div className="lessonHead"><span className="eyebrow">VIDEOS DE CORRECCIÓN</span><h3>{footworkIssue?'Footwork, pivote y salidas':'Fundamentos aplicables a tu prioridad principal'}</h3></div><div className="lessonGrid"><article><iframe src="https://www.youtube.com/embed/-OK0kpv58Rk" title="Cómo mejorar footwork de boxeo" allowFullScreen/><b>Footwork: cómo corregirlo</b><span>Tony Jeffries · usa este video para comparar base, desplazamiento y pies demasiado abiertos.</span></article><article><iframe src="https://www.youtube.com/embed/hNclexRmDsY" title="Cómo pivotar en boxeo" allowFullScreen/><b>Pivote y salida por ángulo</b><span>Tony Jeffries · referencia visual para no quedar frente al rival después de atacar.</span></article></div></section>
-
     <h3 className="evidenceTitle" id="evidence">EVIDENCIA REPRODUCIBLE <span>{report.evidence.length} momentos</span></h3>
     {mediaSrc && selectedEvidence && <section className="evidenceViewer" data-testid="evidence-viewer"><div className="evidencePlayer"><video key={mediaSrc} data-testid="evidence-video" ref={evidenceVideoRef} src={mediaSrc} controls muted playsInline preload="auto" poster={frames[selectedEvidence.time] || undefined}/></div><div><span className="eyebrow">MOMENTO SELECCIONADO · {selectedEvidence.time}</span><h3>{selectedEvidence.title}</h3><p>{selectedEvidence.observation}</p><small><strong>CORRECCIÓN</strong>{selectedEvidence.correction}</small><button data-testid="replay-selected" onClick={()=>playEvidence(selectedEvidence)}>▶ REPRODUCIR DESDE {selectedEvidence.time}</button></div></section>}
     <div className="evidence">{report.evidence.length?report.evidence.map((e,i)=><button data-testid="evidence-item" key={`${i}-${e.time}`} className={selectedEvidence?.time===e.time?'selected':''} onClick={()=>playEvidence(e)}>{frames[e.time]?<img src={frames[e.time]} alt={`Captura del sparring en ${e.time}`}/>:<div className="framePlaceholder">CAPTURA<br/>PREPARANDO</div>}<time>{e.time}</time><div><b>{e.title}</b><span>{e.observation}</span><small><strong>CORRECCIÓN</strong>{e.correction}</small></div><em>▶</em></button>):<div className="noEvidence">Este reporte no devolvió timestamps verificables. Fight AI no inventa evidencia.</div>}</div>
