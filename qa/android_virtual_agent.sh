@@ -31,31 +31,61 @@ launch_app(){
 
 app_fatal_in_log(){
   local file="$1"
-  # Android 35 emulator system processes can ANR while the hosted runner is
-  # saturated. A release failure is valid only when AndroidRuntime identifies
-  # Fight AI itself as the crashing process. Do not let com.android.phone or
-  # System UI failures masquerade as an application crash.
+  # Android 35 emulator system processes can ANR/crash while the hosted runner
+  # is saturated. A release failure is valid only when Fight AI itself is the
+  # crashing process; Bluetooth/phone/System UI noise must not masquerade as an
+  # application crash.
   grep -Eq "Process: ${APP_ID}([,[:space:]]|$)|FATAL EXCEPTION.*${APP_ID}|${APP_ID}.*FATAL EXCEPTION|am_crash.*${APP_ID}" "$file" 2>/dev/null
 }
 
-recover_system_ui_anr(){
-  local xml="$OUT/fightai-home.xml"
-  for attempt in 1 2 3; do
-    if ! grep -Eq "System UI isn.t responding|android:id/aerr_wait|com.android.systemui" "$xml" 2>/dev/null; then
-      return 0
-    fi
-    log "INFO: emulator System UI ANR detected; choosing Wait and retrying app launch (attempt $attempt/3)"
-    # Pixel 7 test profile is 1080x2400. This lands on the ANR dialog's Wait button.
-    adb shell input tap 540 1336 >/dev/null 2>&1 || true
-    sleep 5
-    launch_app
-    sleep 8
-    adb exec-out screencap -p > "$OUT/01-home-retry-$attempt.png" || true
-    adb logcat -d > "$OUT/logcat-home.txt" || true
-    capture_hierarchy || true
+click_xml_text(){
+  local wanted="$1"
+  python3 - "$OUT/fightai-home.xml" "$wanted" <<'PY' | while read -r x y; do
+import re,sys,xml.etree.ElementTree as ET
+path,wanted=sys.argv[1:]
+try:
+    root=ET.parse(path).getroot()
+except Exception:
+    raise SystemExit(0)
+for node in root.iter('node'):
+    text=(node.attrib.get('text') or '')
+    rid=(node.attrib.get('resource-id') or '')
+    desc=(node.attrib.get('content-desc') or '')
+    if wanted.lower() not in (text+' '+rid+' '+desc).lower():
+        continue
+    m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', node.attrib.get('bounds',''))
+    if m:
+        x1,y1,x2,y2=map(int,m.groups())
+        print((x1+x2)//2,(y1+y2)//2)
+        break
+PY
+    adb shell input tap "$x" "$y" >/dev/null 2>&1 || true
+    return 0
   done
-  if grep -Eq "System UI isn.t responding|android:id/aerr_wait|com.android.systemui" "$xml" 2>/dev/null; then
-    log "FAIL: emulator System UI ANR remained after recovery retries"
+  return 1
+}
+
+recover_emulator_system_dialogs(){
+  local xml="$OUT/fightai-home.xml"
+  for attempt in 1 2 3 4; do
+    # Hosted Android 35 occasionally surfaces system-process crash dialogs on
+    # top of the app (observed: Bluetooth keeps stopping, System UI ANR). Dismiss
+    # only system dialogs, then relaunch Fight AI and require its UI to render.
+    if grep -Eqi "keeps stopping|isn.t responding|android:id/aerr_(close|wait)|com.android.systemui|com.android.bluetooth|Bluetooth" "$xml" 2>/dev/null; then
+      log "INFO: emulator system crash/ANR dialog detected; dismissing and retrying Fight AI (attempt $attempt/4)"
+      click_xml_text "Close app" || click_xml_text "Wait" || click_xml_text "Cerrar app" || click_xml_text "Esperar" || adb shell input keyevent 4 >/dev/null 2>&1 || true
+      sleep 4
+      launch_app
+      sleep 8
+      adb exec-out screencap -p > "$OUT/01-home-retry-$attempt.png" || true
+      adb logcat -d > "$OUT/logcat-home.txt" || true
+      capture_hierarchy || true
+      continue
+    fi
+    return 0
+  done
+  if grep -Eqi "keeps stopping|isn.t responding|android:id/aerr_(close|wait)|com.android.systemui|com.android.bluetooth|Bluetooth" "$xml" 2>/dev/null; then
+    log "FAIL: emulator system crash/ANR dialog remained after recovery retries"
     exit 14
   fi
 }
@@ -77,7 +107,7 @@ if ! capture_hierarchy; then
   exit 9
 fi
 
-recover_system_ui_anr
+recover_emulator_system_dialogs
 
 if app_fatal_in_log "$OUT/logcat-home.txt"; then
   log "FAIL: Fight AI process crashed after launch"
