@@ -18,5 +18,6 @@ ENV PORT=3000
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/qa/gemini-proof-red-gloves-tiny.b64 ./qa/gemini-proof-red-gloves-tiny.b64
 EXPOSE 3000
 CMD ["npm","run","start"]
