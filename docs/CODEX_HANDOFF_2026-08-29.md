@@ -8,6 +8,51 @@
 
 Do not restart either client from scratch. Continue from these branches and preserve the shared report semantics, fighter identity controls, truthful provider attribution and evidence-first coaching contract.
 
+## Access and infrastructure contract for Codex
+
+Codex should operate through the existing repository and short-lived/federated credentials only. Do **not** add long-lived AWS keys, Gemini keys, passwords or tokens to source control.
+
+### GitHub
+
+- Repository: `pinoaraj/fight-ai`
+- Web development branch: `web/mvp`
+- Android development/QA branch: `qa/cloud-android`
+- Current web PR: #2 into `main`
+- Web CI workflow: `.github/workflows/web-ci.yml`
+- AWS deployment workflow: `.github/workflows/web-aws-deploy.yml`
+- Production streaming smoke workflow: `.github/workflows/web-streaming-smoke.yml`
+- GitHub Actions deploy authentication uses AWS OIDC. Preserve this design.
+
+Codex must be connected to the same GitHub account/repository with permission to read/write branches and workflows. The repository itself contains all non-secret configuration needed to understand the deployment.
+
+### AWS
+
+Current beta architecture: GitHub Actions OIDC → Amazon ECR → Application Load Balancer → ECS Fargate.
+
+- AWS account: use the account already authorized by the GitHub OIDC role; do not hard-code account credentials.
+- ECS / ALB region: `sa-east-1`
+- ECR region: `us-east-2`
+- GitHub deploy IAM role: `FightAIGitHubDeployRole`
+- ECS task execution role: `FightAIEcsTaskExecutionRole`
+- Current public beta URL: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`
+- ALB idle timeout for long analysis: 1200 seconds
+- Current ECS task sizing for web beta: 1 vCPU / 3 GB RAM; Node heap capped near 2304 MB
+
+For normal deployment, Codex should change code/workflows and let GitHub Actions assume `FightAIGitHubDeployRole` through OIDC. No static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` belongs in the repository.
+
+If direct AWS CLI work is later required from a Codex local environment, use an authenticated AWS profile/SSO/federated session scoped to Fight AI resources. A one-time user login/authorization may be required in that environment; the repository must never become the credential store.
+
+### Gemini / AI runtime
+
+- Gemini runs server-side only.
+- `GEMINI_API_KEY` is supplied to the deployment as a secret; never expose it to browser/mobile code, logs, docs or commits.
+- Gemini may be credited in a report only when the runtime response has `provider: "Gemini"` and `usedInReport: true`.
+- `FIGHT_AI_API_URL`, when configured, switches `/api/analyze` to the shared-backend adapter path.
+
+### Safe diagnostics
+
+Codex may inspect workflow/job status, HTTP status, health payloads and sanitized error classes. Do not print secret values or full credential material while debugging.
+
 ## Web checkpoint
 
 The web beta is Next.js/React/TypeScript and is deployed through GitHub OIDC to AWS ECR + ALB + ECS Fargate. The browser supports local MP4 preview, automatic non-zero decoded frame selection, visual fighter marking, fighter descriptors, stance/sport/language, coach-focus controls, staged analysis progress, Gemini-backed clinical report generation, Visual Coach teaching aids, reproducible evidence playback, captured evidence frames and printable/PDF diagrams.
@@ -57,8 +102,10 @@ The next Codex pass should align Android with the web contract instead of creati
 
 ## Recommended Codex starting order
 
-1. Read `docs/GRAPIFY_BETA_SPEC.md` and this file.
-2. Check latest CI/deploy status on `web/mvp` before changing code.
-3. Run/extend the web regression suite when touching preview, upload, evidence, PDF or report rendering.
-4. Compare `qa/cloud-android` contract/UI against web and converge shared semantics without rewriting working Android QA.
-5. Keep documentation synchronized with behavior in the same change.
+1. Connect Codex to the same GitHub account and open `pinoaraj/fight-ai`.
+2. Read `docs/GRAPIFY_BETA_SPEC.md` and this file.
+3. Check latest CI/deploy status on `web/mvp` before changing code.
+4. Run/extend the web regression suite when touching preview, upload, evidence, PDF or report rendering.
+5. Compare `qa/cloud-android` contract/UI against web and converge shared semantics without rewriting working Android QA.
+6. Keep documentation synchronized with behavior in the same change.
+7. Use GitHub OIDC for AWS deployments; only establish a local AWS SSO/profile session if a task truly requires direct AWS CLI access.
