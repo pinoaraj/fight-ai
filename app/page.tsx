@@ -3,11 +3,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 type Evidence = { time: string; title: string; observation: string; correction: string };
+type PipelineTimings = {
+  upload_ms?: number; preprocessing_ms?: number; gemini_upload_ms?: number; gemini_processing_ms?: number; analysis_ms?: number; total_ms?: number;
+  original_size_bytes?: number; processed_size_bytes?: number; clip_count?: number;
+};
 type Report = {
   mode: 'real' | 'demo'; provider: string; usedInReport: boolean; summary: string;
   strengths: string[]; priorities: string[]; opponent: string[]; plan: string[]; drills: string[]; evidence: Evidence[];
+  timings?: PipelineTimings;
 };
 type Anchor = { x: number; y: number; size: number } | null;
+type AnalysisContext = Record<string, string>;
+type UploadedAnalysisSession = {
+  fileName: string;
+  fileUri: string;
+  mimeType: string;
+  context: AnalysisContext;
+  timings: PipelineTimings;
+};
 
 const focusOptions = [
   ['technique','Mejorar boxeo'], ['weaknesses','Detectar debilidades'], ['strategy','Analizar estrategia'],
@@ -90,6 +103,7 @@ export default function Home() {
   const [elapsed, setElapsed] = useState(0);
   const [stageFloor, setStageFloor] = useState(0);
   const [error, setError] = useState('');
+  const [uploadedSession, setUploadedSession] = useState<UploadedAnalysisSession | null>(null);
   const [frames, setFrames] = useState<Record<string,string>>({});
   const [replayStatus, setReplayStatus] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -118,7 +132,7 @@ export default function Home() {
   }, [report, reportVideoSrc]);
 
   function selectVideo(file: File | null) {
-    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewTime(0); setError(''); setReplayStatus('');
+    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewTime(0); setError(''); setReplayStatus(''); setUploadedSession(null);
   }
   function showDemo() { setFrames({}); setReport(demo); window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
   function toggleFocus(id: string) { setFocuses(x => x.includes(id) ? x.filter(v => v !== id) : [...x, id]); }
@@ -177,12 +191,20 @@ export default function Home() {
     return data;
   }
 
+  function requestUploadedAnalysis(session: UploadedAnalysisSession) {
+    return fetch('/api/analyze-uploaded', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...session.context, fileName: session.fileName, fileUri: session.fileUri, mimeType: session.mimeType }),
+    });
+  }
+
   async function analyze() {
     if (!video) return setError('Selecciona un video antes de analizar.');
     if (!anchor && !gloveColor && !topColor && !fighterNotes.trim()) return setError('Marca al peleador o agrega características para poder seguirlo durante el video.');
     setBusy(true); setStageFloor(0); setError(''); setReport(null); setFrames({});
     try {
-      const context = {
+      let directSession: UploadedAnalysisSession | null = null;
+      const context: AnalysisContext = {
         language, sport, stance, athlete_marker: anchor ? 'visual_anchor' : 'visual_reid',
         glove_color: gloveColor, top_color: topColor, relative_height: relativeHeight, build, fighter_notes: fighterNotes,
         analysis_focus: focuses.join(','), custom_focus: customFocus,
@@ -197,16 +219,34 @@ export default function Home() {
         for (const [key, value] of Object.entries(context)) body.append(key, value);
         response = await fetch('/api/analyze', { method: 'POST', body });
       } else {
+        const uploadStarted = performance.now();
         const uploadedResponse = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4', 'x-fight-ai-name': encodeURIComponent(video.name || 'fight-ai-sparring.mp4'), 'x-fight-ai-size': String(video.size) }, body: video });
         const uploadedRaw = await uploadedResponse.text();
         let uploaded: { fileName?: string; fileUri?: string; mimeType?: string; error?: string } | null = null;
         try { uploaded = uploadedRaw ? JSON.parse(uploadedRaw) : null; } catch { uploaded = null; }
         if (!uploadedResponse.ok || !uploaded?.fileName || !uploaded.fileUri) throw new Error(uploaded?.error || `La carga del video terminó con HTTP ${uploadedResponse.status}.`);
+        const session: UploadedAnalysisSession = {
+          context, fileName: uploaded.fileName, fileUri: uploaded.fileUri, mimeType: uploaded.mimeType || video.type || 'video/mp4',
+          timings: { upload_ms: Math.round(performance.now() - uploadStarted), original_size_bytes: video.size, processed_size_bytes: video.size, clip_count: 1 },
+        };
+        directSession = session;
+        setUploadedSession(session);
         setStageFloor(1);
-        response = await fetch('/api/analyze-uploaded', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...context, fileName: uploaded.fileName, fileUri: uploaded.fileUri, mimeType: uploaded.mimeType || video.type || 'video/mp4' }) });
+        response = await requestUploadedAnalysis(session);
         setStageFloor(2);
       }
-      const data = await parseResponse(response); setStageFloor(5); setReport(data);
+      const data = await parseResponse(response); setStageFloor(5); setReport({ ...data, timings: { ...data.timings, ...directSession?.timings } }); setUploadedSession(null);
+      window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Error inesperado.'); }
+    finally { setBusy(false); }
+  }
+
+  async function retryUploadedAnalysis() {
+    if (!uploadedSession) return;
+    setBusy(true); setStageFloor(1); setError(''); setReport(null); setFrames({});
+    try {
+      const data = await parseResponse(await requestUploadedAnalysis(uploadedSession));
+      setStageFloor(5); setReport({ ...data, timings: { ...data.timings, ...uploadedSession.timings } }); setUploadedSession(null);
       window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
     } catch (e) { setError(e instanceof Error ? e.message : 'Error inesperado.'); }
     finally { setBusy(false); }
@@ -244,7 +284,7 @@ export default function Home() {
       <div className="analysisOptions"><label>Disciplina<select data-testid="sport-select" value={sport} onChange={e=>setSport(e.target.value as 'boxing'|'kickboxing')}><option value="boxing">Boxeo</option><option value="kickboxing">Kickboxing</option></select></label><label>Guardia<select data-testid="stance-select" value={stance} onChange={e=>setStance(e.target.value as 'orthodox'|'southpaw'|'switch')}><option value="orthodox">Ortodoxa</option><option value="southpaw">Zurda</option><option value="switch">Switch</option></select></label><label>Idioma<select value={language} onChange={e=>setLanguage(e.target.value as 'es'|'en')}><option value="es">Español</option><option value="en">English</option></select></label></div>
       <button data-testid="analyze-button" className="primary" disabled={busy||!video} onClick={analyze}>{busy?'ANALIZANDO SPARRING…':'ANALIZAR SPARRING'}<span>→</span></button>
       {busy && <div className="processingCard" data-testid="processing-state"><div className="spinner"/><div><b>{processingSteps[processingStep]}</b><span>{elapsed<60?`${elapsed}s transcurridos`:`${Math.floor(elapsed/60)}m ${elapsed%60}s transcurridos`} · el archivo se carga una sola vez y luego Gemini analiza la referencia preparada.</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
-      {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span></div>}
+      {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span>{uploadedSession && !busy && <button data-testid="retry-uploaded-analysis" onClick={retryUploadedAnalysis}>REINTENTAR ANÁLISIS SIN VOLVER A SUBIR</button>}</div>}
     </aside>
     <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>06</span><div className="emptyRing">◎</div><h2>Tu coaching aparecerá aquí</h2><p>El reporte mostrará si Gemini participó, prioridades, rival, estrategia, drills, videos de corrección y evidencia reproducible.</p></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc}/>}</section></section>
     <footer>Fight AI · Herramienta de apoyo técnico. La decisión final pertenece al atleta y su entrenador.</footer>
@@ -273,7 +313,7 @@ function ReportView({report,onJumpMain,frames,mediaSrc}:{report:Report;onJumpMai
     if (report.mode === 'real') onJumpMain(e.time);
   }
   return <div data-testid="report-content">
-    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small></div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>EXPORTAR REPORTE A PDF + IMÁGENES</button></div></div>
+    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small>{report.timings && <small data-testid="pipeline-timings">Carga {formatMs(report.timings.upload_ms)} · Preparación Gemini {formatMs(report.timings.gemini_processing_ms)} · Coaching {formatMs(report.timings.analysis_ms)} · Total servidor {formatMs(report.timings.total_ms)}</small>}</div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>EXPORTAR REPORTE A PDF + IMÁGENES</button></div></div>
     {report.mode === 'demo' && <section className="demoVideoSection" data-testid="demo-video-section"><div><span className="eyebrow">VIDEO DE DEMOSTRACIÓN</span><h3>Prueba cómo funciona la evidencia antes de subir tu sparring</h3><p>Este clip corto demuestra selección, timestamps y reproducción. El reporte de ejemplo no afirma que sea un análisis real de este clip.</p></div><video data-testid="demo-video" src="/api/demo-video" controls muted playsInline preload="auto"/></section>}
     <div className="takeaway"><span>DIAGNÓSTICO PRINCIPAL</span><p>{report.summary}</p></div>
     <div className="reportNav"><a href="#priorities">Prioridades</a><a href="#opponent">Rival</a><a href="#visual-coach">Visual Coach</a><a href="#evidence">Evidencia</a></div>
@@ -298,3 +338,5 @@ function TechniqueDiagram({kind,title}:{kind:'entry'|'guard'|'pivot';title:strin
 }
 
 function Card({title,items,tone,id}:{title:string;items:string[];tone:'good'|'focus'|'neutral';id?:string}) { return <div className={`card ${tone}`} id={id}><h3>{title}</h3>{items.length?items.map((x,i)=><p key={`${i}-${x}`}><span>{String(i+1).padStart(2,'0')}</span>{x}</p>):<p className="muted">Sin hallazgos adicionales.</p>}</div>; }
+
+function formatMs(value?: number) { return typeof value === 'number' ? `${(value / 1000).toFixed(value >= 60_000 ? 0 : 1)} s` : 'no medido'; }

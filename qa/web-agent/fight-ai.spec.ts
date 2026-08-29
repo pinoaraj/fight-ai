@@ -111,6 +111,56 @@ test('browser uses raw streamed upload then uploaded-file analysis when Gemini i
   expect(uploadedAnalysisSeen).toBe(true);
   expect(multipartAnalyzeSeen).toBe(false);
   await expect(page.getByTestId('provider-badge')).toContainText('GEMINI');
+  await expect(page.getByTestId('pipeline-timings')).toContainText('Carga');
+});
+
+test('a transient uploaded-file analysis failure retries without uploading the video again', async ({ page }) => {
+  const video = realVideo();
+  let uploadCalls = 0;
+  let analysisCalls = 0;
+  let firstPayload: Record<string, unknown> | undefined;
+
+  await page.route('**/api/health', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ backendConfigured: false, geminiConfigured: true, analysisReady: true }),
+  }));
+  await page.route('**/api/upload', async route => {
+    uploadCalls += 1;
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ fileName: 'files/retry-proof', fileUri: 'https://generativelanguage.googleapis.com/v1beta/files/retry-proof', mimeType: 'video/mp4' }),
+    });
+  });
+  await page.route('**/api/analyze-uploaded', async route => {
+    analysisCalls += 1;
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    if (analysisCalls === 1) {
+      firstPayload = payload;
+      await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'Gemini se está preparando; intenta de nuevo.' }) });
+      return;
+    }
+    expect(payload).toEqual(firstPayload);
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Reintento sin segunda carga verificado.',
+        strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
+        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base' }],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(video);
+  await page.getByTestId('glove-color').fill('rojos');
+  await page.getByTestId('analyze-button').click();
+  const retry = page.getByTestId('retry-uploaded-analysis');
+  await expect(retry).toBeVisible({ timeout: 20_000 });
+  expect(uploadCalls).toBe(1);
+  await retry.click();
+  await expect(page.getByText('Reintento sin segunda carga verificado.', { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(uploadCalls).toBe(1);
+  expect(analysisCalls).toBe(2);
+  await expect(retry).toHaveCount(0);
 });
 
 test('virtual athlete can identify fighter choose coach focus submit analysis and replay uploaded evidence', async ({ page }) => {

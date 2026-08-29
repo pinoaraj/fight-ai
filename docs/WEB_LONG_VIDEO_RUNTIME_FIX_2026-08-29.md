@@ -24,3 +24,7 @@ This hardening removes the known 5-minute ALB ceiling and gives the synchronous 
 
 ## Release/QA rule
 Do not treat the tiny Gemini proof clip as sufficient evidence for large-video reliability. Before general public launch, add and pass a representative large sparring upload/report E2E regression, plus CloudWatch task/application diagnostics. If another real user upload returns an upstream 502 after this hardening, prioritize async ingestion/streaming upload rather than increasing timeouts or memory again.
+
+## Per-run timing instrumentation
+
+The web client records browser upload duration and original/processed byte counts for the direct Gemini flow. The streaming upload response records Gemini upload duration; `/api/analyze-uploaded` records Gemini file-preparation and coaching-generation durations. The completed report shows the relevant timing summary, using `no medido` rather than inventing a value for stages not yet implemented (preprocessing remains `0` and one original clip is used). These measurements establish the baseline for the next architectural step: candidate-moment detection and short original clips rather than raising timeouts again.

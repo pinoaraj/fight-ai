@@ -4,6 +4,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const startedAt = Date.now();
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'Gemini no está configurado en el servidor.' }, { status: 503 });
@@ -57,6 +58,13 @@ export async function POST(req: NextRequest) {
       mimeType,
       state: fileInfo.file.state || 'PROCESSING',
       size,
+      timings: {
+        gemini_upload_ms: Date.now() - startedAt,
+        total_ms: Date.now() - startedAt,
+        original_size_bytes: size,
+        processed_size_bytes: size,
+        clip_count: 1,
+      },
     });
   } catch (error) {
     console.error('Fight AI streaming upload error', error);

@@ -70,6 +70,7 @@ function val(data: UploadedAnalysisRequest, key: keyof UploadedAnalysisRequest, 
 }
 
 export async function POST(req: NextRequest) {
+  const startedAt = Date.now();
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
@@ -80,6 +81,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Referencia de video no válida.' }, { status: 400 });
     }
 
+    const processingStartedAt = Date.now();
     let state = 'PROCESSING';
     const deadline = Date.now() + 8 * 60 * 1000;
     while (state !== 'ACTIVE' && Date.now() < deadline) {
@@ -131,6 +133,8 @@ ESTÁNDAR DE COACHING:
 
 Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.`;
 
+    const geminiProcessingMs = Date.now() - processingStartedAt;
+    const analysisStartedAt = Date.now();
     const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
     const list = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
     const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.filter(x => x && typeof x === 'object').map(x => {
@@ -143,6 +147,13 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Análisis completado con Gemini.',
       strengths: list(parsed.strengths), priorities: list(parsed.priorities).slice(0, 3), opponent: list(parsed.opponent),
       plan: list(parsed.plan), drills: list(parsed.drills), evidence,
+      timings: {
+        preprocessing_ms: 0,
+        gemini_processing_ms: geminiProcessingMs,
+        analysis_ms: Date.now() - analysisStartedAt,
+        total_ms: Date.now() - startedAt,
+        clip_count: 1,
+      },
     });
   } catch (error) {
     console.error('Fight AI uploaded-file analysis error', error);
