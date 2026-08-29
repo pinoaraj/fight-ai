@@ -1,6 +1,6 @@
 # Grapify / Fight AI — Living Product & Architecture Spec
 
-_Last updated: 2026-08-28_
+_Last updated: 2026-08-29_
 
 ## 1. Product goal
 Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide concise coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
@@ -145,9 +145,11 @@ Current web production architecture:
 
 The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
 
-AWS compute is activated and a previous deployment reached ECR push, ALB/ECS deployment and healthy public `/api/health` in `sa-east-1`. The current deployment is temporarily blocked earlier at GitHub OIDC role assumption because the IAM trust policy was narrowed with a malformed GitHub subject containing numeric owner/repository IDs. GitHub's actual branch subject for this workflow is `repo:pinoaraj/fight-ai:ref:refs/heads/web/mvp`.
+AWS compute is activated and a previous deployment reached ECR push, ALB/ECS deployment and healthy public `/api/health` in `sa-east-1`. The deployment is currently blocked at GitHub OIDC role assumption: even after the local trust-repair script reported success, STS still returns `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
 
-`infra/aws/repair-oidc-trust.ps1` now repairs only the trust relationship to allow the canonical `web/mvp` and `main` branch subjects and deliberately does not overwrite the existing ECS/ALB/ECR inline permissions. After that one manual IAM update, the deployment workflow can resume.
+The deploy workflow now includes a safe OIDC diagnostic step before AWS credential configuration. It decodes only non-secret JWT claims (`iss`, `aud`, `sub`, repository/ref/workflow metadata), explicitly compares `sub` with `repo:pinoaraj/fight-ai:ref:refs/heads/web/mvp`, and never prints the token itself. The next deployment run is the source of truth for the exact claim IAM must trust.
+
+`infra/aws/repair-oidc-trust.ps1` remains scoped to the trust relationship only and deliberately does not overwrite existing ECS/ALB/ECR inline permissions. If the diagnostic confirms the expected subject yet STS still rejects the role, the next manual AWS repair must verify the role's effective trust document and the GitHub OIDC provider configuration rather than broadening the role blindly.
 
 Current public beta endpoint from the last healthy deployment: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
 
@@ -178,7 +180,7 @@ AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionR
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates and preserve Android as the canonical product-flow reference.
 2. `web/mvp`: replace the simplified MVP presentation with Android-parity upload → fighter selection → analysis options → processing → report → evidence/visuals → PDF flow.
-3. Repair the GitHub OIDC trust relationship, then rerun ECS/ALB deployment and the real deployed Gemini smoke.
+3. Use the safe OIDC claim diagnostic to resolve the effective IAM trust mismatch, then rerun ECS/ALB deployment and the real deployed Gemini smoke.
 4. Harden large-video ingestion so real sparring files do not rely on one memory-heavy synchronous request; add persistent runtime logging.
 5. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
 6. Keep both clients aligned to this Grapify spec and the same report contract.
