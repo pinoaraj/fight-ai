@@ -49,7 +49,7 @@ Target selection must be explicit and Android-like. The preferred web flow is:
 
 Marking mode must never darken or cover the video image. The click layer is transparent so the athlete sees the exact fighter being selected. The mark records both frame-relative coordinates and the video time used for the anchor.
 
-The web must not enable marking merely from video metadata. It first confirms a decoded non-zero frame. If local browser decoding stalls (for example, a phone codec such as HEVC), it exposes **Generar frame compatible**: the server decodes one JPEG with FFmpeg and returns it only as the visual selection surface. The original video remains the analysis input and is still sent through the existing Gemini upload flow; the athlete is never asked to mark a black surface.
+The web must not enable marking merely from video metadata. It first confirms a decoded non-zero frame. If local browser decoding stalls (for example, a phone codec such as HEVC), it automatically generates a compatible selection frame: the server stages the upload only on ephemeral disk, uses FFmpeg to decode one JPEG, deletes the temporary file and returns that JPEG as the visual selection surface. The original video remains the analysis input and is still sent through the existing Gemini upload flow; the athlete is never asked to mark a black surface.
 
 Web multipart identity fields now include:
 - `athlete_marker`
