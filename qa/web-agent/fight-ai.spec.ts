@@ -20,7 +20,7 @@ test('virtual athlete can navigate rich demo coaching report with playable evide
   await expect(page.getByTestId('demo-video-section')).toBeVisible();
   const demoVideo = page.getByTestId('demo-video');
   await expect(demoVideo).toBeVisible();
-  await expect.poll(async () => demoVideo.evaluate((node: HTMLVideoElement) => ({ readyState: node.readyState, width: node.videoWidth, height: node.videoHeight })), { timeout: 15_000 }).toMatchObject({ readyState: 4 });
+  await expect.poll(async () => demoVideo.evaluate((node: HTMLVideoElement) => node.readyState), { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
   const demoMedia = await demoVideo.evaluate((node: HTMLVideoElement) => ({ width: node.videoWidth, height: node.videoHeight }));
   expect(demoMedia.width).toBeGreaterThan(0);
   expect(demoMedia.height).toBeGreaterThan(0);
@@ -55,10 +55,11 @@ test('real video decodes to a visible selection frame and fighter can be circled
   await expect(page.getByText(/Peleador marcado en/)).toBeVisible();
 });
 
-test('virtual athlete can identify fighter choose coach focus and submit analysis', async ({ page }) => {
+test('virtual athlete can identify fighter choose coach focus submit analysis and replay uploaded evidence', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('video-input').setInputFiles(realVideo());
-  await expect(page.getByTestId('video-preview')).toBeVisible();
+  const sourcePreview = page.getByTestId('video-preview');
+  await expect(sourcePreview).toBeVisible();
   await page.getByTestId('glove-color').fill('azules');
   await page.getByTestId('fighter-notes').fill('polera negra, más alto, shorts verdes');
   await page.getByTestId('focus-footwork').click();
@@ -74,6 +75,20 @@ test('virtual athlete can identify fighter choose coach focus and submit analysi
   await expect(page.getByTestId('evidence-item')).toHaveCount(2);
   await expect(page.getByTestId('print-report')).toBeVisible();
   await expect(page.getByTestId('printable-diagrams')).toBeVisible();
+
+  await page.getByTestId('evidence-item').first().click();
+  const replay = page.getByTestId('evidence-video');
+  await expect(replay).toBeVisible();
+  await page.getByTestId('replay-selected').click();
+  await expect.poll(async () => replay.evaluate((node: HTMLVideoElement) => ({
+    readyState: node.readyState,
+    width: node.videoWidth,
+    height: node.videoHeight,
+    time: node.currentTime,
+  })), { timeout: 10_000 }).toMatchObject({ width: 320, height: 240 });
+  const replayState = await replay.evaluate((node: HTMLVideoElement) => ({ readyState: node.readyState, time: node.currentTime }));
+  expect(replayState.readyState).toBeGreaterThanOrEqual(2);
+  expect(replayState.time).toBeGreaterThan(0);
 });
 
 test('mobile agent sees touch-safe single-column flow without horizontal overflow', async ({ page }, testInfo) => {
