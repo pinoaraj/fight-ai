@@ -74,6 +74,7 @@ export default function Home() {
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [stageFloor, setStageFloor] = useState(0);
   const [error, setError] = useState('');
   const [frames, setFrames] = useState<Record<string,string>>({});
   const [replayStatus, setReplayStatus] = useState('');
@@ -81,7 +82,7 @@ export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const reportRef = useRef<HTMLElement>(null);
   const videoUrl = useMemo(() => (video ? URL.createObjectURL(video) : ''), [video]);
-  const processingStep = Math.min(processingSteps.length - 1, Math.floor(elapsed / 28));
+  const processingStep = Math.min(processingSteps.length - 1, Math.max(stageFloor, Math.floor(elapsed / 32)));
 
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
   useEffect(() => {
@@ -129,27 +130,67 @@ export default function Home() {
     setPreviewTime(videoRef.current?.currentTime || previewTime);
   }
 
+  async function parseResponse(response: Response) {
+    const raw = await response.text();
+    let data: Report | { error?: string } | null = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+    if (!response.ok) {
+      const serverMessage = data && 'error' in data && typeof data.error === 'string' ? data.error : '';
+      throw new Error(serverMessage || `El análisis terminó con HTTP ${response.status}.`);
+    }
+    if (!data || !('summary' in data)) throw new Error('El servidor respondió sin un reporte válido.');
+    return data;
+  }
+
   async function analyze() {
     if (!video) return setError('Selecciona un video antes de analizar.');
     if (!anchor && !gloveColor && !topColor && !fighterNotes.trim()) return setError('Marca al peleador o agrega características para poder seguirlo durante el video.');
-    setBusy(true); setError(''); setReport(null); setFrames({});
+    setBusy(true); setStageFloor(0); setError(''); setReport(null); setFrames({});
     try {
-      const body = new FormData();
-      body.append('video', video); body.append('language', language); body.append('sport', sport); body.append('stance', stance);
-      body.append('athlete_marker', anchor ? 'visual_anchor' : 'visual_reid');
-      body.append('glove_color', gloveColor); body.append('top_color', topColor); body.append('relative_height', relativeHeight);
-      body.append('build', build); body.append('fighter_notes', fighterNotes); body.append('analysis_focus', focuses.join(',')); body.append('custom_focus', customFocus);
-      if (anchor) { body.append('anchor_x', anchor.x.toFixed(2)); body.append('anchor_y', anchor.y.toFixed(2)); body.append('anchor_size', anchor.size.toFixed(2)); body.append('anchor_time', previewTime.toFixed(2)); }
-      const response = await fetch('/api/analyze', { method: 'POST', body });
-      const raw = await response.text(); let data: Report | { error?: string } | null = null;
-      try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
-      if (!response.ok) {
-        const serverMessage = data && 'error' in data && typeof data.error === 'string' ? data.error : '';
-        if (serverMessage) throw new Error(serverMessage);
-        throw new Error(`El análisis terminó con HTTP ${response.status}.`);
+      const context = {
+        language, sport, stance, athlete_marker: anchor ? 'visual_anchor' : 'visual_reid',
+        glove_color: gloveColor, top_color: topColor, relative_height: relativeHeight, build, fighter_notes: fighterNotes,
+        analysis_focus: focuses.join(','), custom_focus: customFocus,
+        anchor_x: anchor ? anchor.x.toFixed(2) : '', anchor_y: anchor ? anchor.y.toFixed(2) : '',
+        anchor_size: anchor ? anchor.size.toFixed(2) : '', anchor_time: anchor ? previewTime.toFixed(2) : '',
+      };
+
+      const healthResponse = await fetch('/api/health', { cache: 'no-store' });
+      const health = healthResponse.ok ? await healthResponse.json() as { backendConfigured?: boolean } : {};
+      let response: Response;
+
+      if (health.backendConfigured) {
+        const body = new FormData();
+        body.append('video', video);
+        for (const [key, value] of Object.entries(context)) body.append(key, value);
+        response = await fetch('/api/analyze', { method: 'POST', body });
+      } else {
+        setStageFloor(0);
+        const uploadedResponse = await fetch('/api/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': video.type || 'video/mp4',
+            'x-fight-ai-name': encodeURIComponent(video.name || 'fight-ai-sparring.mp4'),
+            'x-fight-ai-size': String(video.size),
+          },
+          body: video,
+        });
+        const uploadedRaw = await uploadedResponse.text();
+        let uploaded: { fileName?: string; fileUri?: string; mimeType?: string; error?: string } | null = null;
+        try { uploaded = uploadedRaw ? JSON.parse(uploadedRaw) : null; } catch { uploaded = null; }
+        if (!uploadedResponse.ok || !uploaded?.fileName || !uploaded.fileUri) throw new Error(uploaded?.error || `La carga del video terminó con HTTP ${uploadedResponse.status}.`);
+
+        setStageFloor(1);
+        response = await fetch('/api/analyze-uploaded', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...context, fileName: uploaded.fileName, fileUri: uploaded.fileUri, mimeType: uploaded.mimeType || video.type || 'video/mp4' }),
+        });
+        setStageFloor(2);
       }
-      if (!data || !('summary' in data)) throw new Error('El servidor respondió sin un reporte válido.');
-      setReport(data); window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+
+      const data = await parseResponse(response);
+      setStageFloor(5); setReport(data);
+      window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
     } catch (e) { setError(e instanceof Error ? e.message : 'Error inesperado.'); }
     finally { setBusy(false); }
   }
@@ -191,7 +232,7 @@ export default function Home() {
       <div className="analysisOptions"><label>Disciplina<select data-testid="sport-select" value={sport} onChange={e=>setSport(e.target.value as 'boxing'|'kickboxing')}><option value="boxing">Boxeo</option><option value="kickboxing">Kickboxing</option></select></label><label>Guardia<select data-testid="stance-select" value={stance} onChange={e=>setStance(e.target.value as 'orthodox'|'southpaw'|'switch')}><option value="orthodox">Ortodoxa</option><option value="southpaw">Zurda</option><option value="switch">Switch</option></select></label><label>Idioma<select value={language} onChange={e=>setLanguage(e.target.value as 'es'|'en')}><option value="es">Español</option><option value="en">English</option></select></label></div>
 
       <button data-testid="analyze-button" className="primary" disabled={busy||!video} onClick={analyze}>{busy?'ANALIZANDO SPARRING…':'ANALIZAR SPARRING'}<span>→</span></button>
-      {busy && <div className="processingCard" data-testid="processing-state"><div className="spinner"/><div><b>{processingSteps[processingStep]}</b><span>{elapsed<60?`${elapsed}s transcurridos`:`${Math.floor(elapsed/60)}m ${elapsed%60}s transcurridos`} · videos grandes pueden tardar varios minutos.</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
+      {busy && <div className="processingCard" data-testid="processing-state"><div className="spinner"/><div><b>{processingSteps[processingStep]}</b><span>{elapsed<60?`${elapsed}s transcurridos`:`${Math.floor(elapsed/60)}m ${elapsed%60}s transcurridos`} · el archivo se carga una sola vez y luego Gemini analiza la referencia preparada.</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
       {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span></div>}
     </aside>
 
