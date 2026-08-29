@@ -204,7 +204,7 @@ Current origin path:
 - task execution role `FightAIEcsTaskExecutionRole`
 - cluster/service/task family `fight-ai-web`
 
-The deployment workflow provisions/reuses the CloudFront distribution labeled `fight-ai-web-https`, waits for it to deploy and prints its HTTPS domain. The ALB DNS is an origin/debug endpoint, not the user-facing URL.
+The deployment workflow provisions/reuses the CloudFront distribution labeled `fight-ai-web-https`, waits for it to deploy and prints its HTTPS domain. The ALB DNS is an origin/debug endpoint, not the user-facing URL. The first run requires the one-time OIDC role policy in `infra/aws/fight-ai-cloudfront-oidc-policy.json`; without it, the workflow fails safely before changing ECS.
 
 The repository uses a custom GitHub OIDC subject template; IAM trust is working and deployments authenticate through short-lived OIDC credentials.
 

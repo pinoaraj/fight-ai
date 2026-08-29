@@ -25,6 +25,8 @@ Codex should operate through the existing repository and short-lived/federated c
 
 Codex must be connected to the same GitHub account/repository with permission to read/write branches and workflows. The repository itself contains all non-secret configuration needed to understand the deployment.
 
+Before the first CloudFront deployment, an AWS account administrator must apply `infra/aws/fight-ai-cloudfront-oidc-policy.json` to `FightAIGitHubDeployRole` (or run `infra/aws/grant-cloudfront-https-permissions.ps1` from the authorized `fight-ai` profile). The role cannot safely grant itself those permissions during a GitHub run.
+
 ### AWS
 
 Current beta architecture: GitHub Actions OIDC → Amazon ECR → ECS Fargate → Application Load Balancer origin → CloudFront HTTPS entry point.

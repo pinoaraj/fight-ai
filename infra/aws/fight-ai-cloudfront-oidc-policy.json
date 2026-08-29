@@ -1,0 +1,32 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageFightAiCloudFrontDistribution",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:ListDistributions",
+        "cloudfront:UpdateDistribution"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageFightAiCloudFrontFreePlanAcl",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:CreateWebACL",
+        "wafv2:GetWebACL",
+        "wafv2:ListWebACLs",
+        "wafv2:UpdateWebACL",
+        "wafv2:AssociateWebACL",
+        "pricingplanmanager:CreateSubscription",
+        "pricingplanmanager:GetSubscription",
+        "pricingplanmanager:ListSubscriptions"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
