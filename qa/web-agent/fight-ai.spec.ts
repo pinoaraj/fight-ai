@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 
-const fakeVideo = { name: 'agent-sparring.mp4', mimeType: 'video/mp4', buffer: Buffer.from('fake-video') };
+function realVideo() {
+  const source = fs.readFileSync(path.join(process.cwd(), 'qa/gemini-proof-red-gloves-tiny.b64'), 'utf8').replace(/\s+/g, '');
+  return { name: 'agent-sparring.mp4', mimeType: 'video/mp4', buffer: Buffer.from(source, 'base64') };
+}
 
 test('virtual athlete can navigate rich demo coaching report', async ({ page }) => {
   await page.goto('/');
@@ -15,9 +20,35 @@ test('virtual athlete can navigate rich demo coaching report', async ({ page }) 
   await expect(page.getByTestId('print-report')).toContainText('PDF');
 });
 
+test('real video decodes to a visible selection frame and fighter can be circled', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(realVideo());
+  const preview = page.getByTestId('video-preview');
+  await expect(preview).toBeVisible();
+  await expect(page.getByTestId('preview-status')).toContainText('FRAME VISIBLE LISTO', { timeout: 15_000 });
+  const media = await preview.evaluate((node: HTMLVideoElement) => ({
+    readyState: node.readyState,
+    width: node.videoWidth,
+    height: node.videoHeight,
+    time: node.currentTime,
+  }));
+  expect(media.readyState).toBeGreaterThanOrEqual(2);
+  expect(media.width).toBeGreaterThan(0);
+  expect(media.height).toBeGreaterThan(0);
+  expect(media.time).toBeGreaterThan(0);
+
+  await page.getByTestId('mark-fighter').click();
+  const overlay = page.getByTestId('marker-overlay');
+  await expect(overlay).toBeVisible();
+  const box = await overlay.boundingBox();
+  expect(box).not.toBeNull();
+  await overlay.click({ position: { x: Math.round((box?.width || 100) * 0.45), y: Math.round((box?.height || 100) * 0.55) } });
+  await expect(page.getByText(/Peleador marcado en/)).toBeVisible();
+});
+
 test('virtual athlete can identify fighter choose coach focus and submit analysis', async ({ page }) => {
   await page.goto('/');
-  await page.getByTestId('video-input').setInputFiles(fakeVideo);
+  await page.getByTestId('video-input').setInputFiles(realVideo());
   await expect(page.getByTestId('video-preview')).toBeVisible();
   await page.getByTestId('glove-color').fill('azules');
   await page.getByTestId('fighter-notes').fill('polera negra, más alto, shorts verdes');
