@@ -33,6 +33,9 @@ env:
   ECS_EXECUTION_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIEcsTaskExecutionRole
   ALB_NAME: fight-ai-web-alb
   TARGET_GROUP_NAME: fight-ai-web-tg
+  CLOUDFRONT_COMMENT: fight-ai-web-https
+  CLOUDFRONT_WAF_NAME: fight-ai-cloudfront-free
+  CLOUDFRONT_PLAN_REGION: us-east-1
 
 jobs:
   deploy:
@@ -136,6 +139,60 @@ jobs:
           ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" --region "$DEPLOY_REGION" --query 'LoadBalancers[0].DNSName' --output text)
           echo "ALB_DNS=$ALB_DNS" >> "$GITHUB_ENV"
 
+      - name: Provision HTTPS CloudFront entry point
+        run: |
+          set -euo pipefail
+          CLOUDFRONT_WAF_ARN=$(aws wafv2 list-web-acls --scope CLOUDFRONT --region "$CLOUDFRONT_PLAN_REGION" --query "WebACLs[?Name=='$CLOUDFRONT_WAF_NAME'].ARN | [0]" --output text)
+          if [ -z "$CLOUDFRONT_WAF_ARN" ] || [ "$CLOUDFRONT_WAF_ARN" = "None" ]; then
+            CLOUDFRONT_WAF_ARN=$(aws wafv2 create-web-acl --name "$CLOUDFRONT_WAF_NAME" --scope CLOUDFRONT --default-action 'Allow={}' --visibility-config 'SampledRequestsEnabled=false,CloudWatchMetricsEnabled=false,MetricName=fightAiCloudfrontFree' --rules '[]' --region "$CLOUDFRONT_PLAN_REGION" --query 'Summary.ARN' --output text)
+          fi
+          test -n "$CLOUDFRONT_WAF_ARN" && test "$CLOUDFRONT_WAF_ARN" != "None"
+          DISTRIBUTION_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Comment=='$CLOUDFRONT_COMMENT'].Id | [0]" --output text)
+          if [ -z "$DISTRIBUTION_ID" ] || [ "$DISTRIBUTION_ID" = "None" ]; then
+            export ALB_DNS CLOUDFRONT_COMMENT CLOUDFRONT_WAF_ARN GITHUB_SHA
+            python - <<'PY'
+          import json, os
+          origin_id='fight-ai-alb-origin'
+          config={
+            'CallerReference': f"fight-ai-web-{os.environ['GITHUB_SHA']}",
+            'Comment': os.environ['CLOUDFRONT_COMMENT'],
+            'Enabled': True,
+            'HttpVersion': 'http2and3',
+            'IsIPV6Enabled': True,
+            'PriceClass': 'PriceClass_100',
+            'Origins': {'Quantity': 1, 'Items': [{
+              'Id': origin_id, 'DomainName': os.environ['ALB_DNS'], 'OriginPath': '',
+              'CustomHeaders': {'Quantity': 0},
+              'CustomOriginConfig': {
+                'HTTPPort': 80, 'HTTPSPort': 443, 'OriginProtocolPolicy': 'http-only',
+                'OriginSslProtocols': {'Quantity': 1, 'Items': ['TLSv1.2']},
+                'OriginReadTimeout': 120, 'OriginKeepaliveTimeout': 60,
+              },
+            }]},
+            'DefaultCacheBehavior': {
+              'TargetOriginId': origin_id, 'ViewerProtocolPolicy': 'redirect-to-https', 'Compress': True,
+              'AllowedMethods': {'Quantity': 7, 'Items': ['GET','HEAD','OPTIONS','PUT','PATCH','POST','DELETE'], 'CachedMethods': {'Quantity': 2, 'Items': ['GET','HEAD']}},
+              'ForwardedValues': {'QueryString': True, 'QueryStringCacheKeys': {'Quantity': 0}, 'Headers': {'Quantity': 1, 'Items': ['*']}, 'Cookies': {'Forward': 'all'}},
+              'MinTTL': 0, 'DefaultTTL': 0, 'MaxTTL': 0,
+              'TrustedSigners': {'Enabled': False, 'Quantity': 0}, 'TrustedKeyGroups': {'Enabled': False, 'Quantity': 0},
+              'LambdaFunctionAssociations': {'Quantity': 0}, 'FunctionAssociations': {'Quantity': 0},
+            },
+            'Restrictions': {'GeoRestriction': {'RestrictionType': 'none', 'Quantity': 0}},
+            'ViewerCertificate': {'CloudFrontDefaultCertificate': True, 'MinimumProtocolVersion': 'TLSv1.2_2021'},
+            'WebACLId': os.environ['CLOUDFRONT_WAF_ARN'],
+          }
+          with open('/tmp/fight-ai-cloudfront.json','w',encoding='utf-8') as out: json.dump(config,out)
+          PY
+            DISTRIBUTION_ID=$(aws cloudfront create-distribution --distribution-config file:///tmp/fight-ai-cloudfront.json --query 'Distribution.Id' --output text)
+          fi
+          aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          DISTRIBUTION_ARN="arn:aws:cloudfront::379549361550:distribution/$DISTRIBUTION_ID"
+          aws pricing-plan-manager create-subscription --plan-family CloudFront --plan-tier FREE --resource-arns "$DISTRIBUTION_ARN" "$CLOUDFRONT_WAF_ARN" --approval-mode IMMEDIATE --client-token "fight-ai-cloudfront-free-$DISTRIBUTION_ID" --region "$CLOUDFRONT_PLAN_REGION" >/dev/null
+          CLOUDFRONT_DOMAIN=$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query 'Distribution.DomainName' --output text)
+          test -n "$CLOUDFRONT_DOMAIN" && test "$CLOUDFRONT_DOMAIN" != "None"
+          echo "CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN" >> "$GITHUB_ENV"
+          echo "Fight AI HTTPS URL: https://$CLOUDFRONT_DOMAIN"
+
       - name: Register task definition and deploy ECS service
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -161,7 +218,7 @@ jobs:
       - name: Verify public site and Gemini runtime
         run: |
           set -euo pipefail
-          URL="http://$ALB_DNS"
+          URL="https://$CLOUDFRONT_DOMAIN"
           echo "Fight AI URL: $URL"
           READY=0
           for i in $(seq 1 30); do

@@ -256,11 +256,24 @@ export default function Home() {
     return data;
   }
 
-  function requestUploadedAnalysis(session: UploadedAnalysisSession) {
-    return fetch('/api/analyze-uploaded', {
+  async function requestUploadedAnalysis(session: UploadedAnalysisSession) {
+    const started = await fetch('/api/analyze-uploaded?async=1', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...session.context, fileName: session.fileName, fileUri: session.fileUri, mimeType: session.mimeType }),
     });
+    const startData = await parseResponse(started) as { id?: string };
+    if (!startData.id) throw new Error('No se pudo iniciar el trabajo de análisis.');
+    for (;;) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+      const statusResponse = await fetch(`/api/analyze-uploaded?id=${encodeURIComponent(startData.id)}`, { cache: 'no-store' });
+      const raw = await statusResponse.text();
+      let data: { status?: string; report?: Report; error?: string } | null = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+      if (data?.status === 'complete' && data.report) return data.report;
+      if (data?.status === 'failed' || !statusResponse.ok && statusResponse.status !== 202) throw new Error(data?.error || 'No se pudo completar el análisis.');
+      if (data?.status === 'coaching') setStageFloor(3);
+      else setStageFloor(1);
+    }
   }
 
   async function analyze() {
@@ -297,10 +310,12 @@ export default function Home() {
         directSession = session;
         setUploadedSession(session);
         setStageFloor(1);
-        response = await requestUploadedAnalysis(session);
-        setStageFloor(2);
+        const data = await requestUploadedAnalysis(session);
+        setStageFloor(5); setReport({ ...data, timings: { ...data.timings, ...directSession?.timings } }); setUploadedSession(null);
+        window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+        return;
       }
-      const data = await parseResponse(response); setStageFloor(5); setReport({ ...data, timings: { ...data.timings, ...directSession?.timings } }); setUploadedSession(null);
+      const data = await parseResponse(response); setStageFloor(5); setReport(data); setUploadedSession(null);
       window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
     } catch (e) { setError(e instanceof Error ? e.message : 'Error inesperado.'); }
     finally { setBusy(false); }
@@ -310,7 +325,7 @@ export default function Home() {
     if (!uploadedSession) return;
     setBusy(true); setStageFloor(1); setError(''); setReport(null); setFrames({});
     try {
-      const data = await parseResponse(await requestUploadedAnalysis(uploadedSession));
+      const data = await requestUploadedAnalysis(uploadedSession);
       setStageFloor(5); setReport({ ...data, timings: { ...data.timings, ...uploadedSession.timings } }); setUploadedSession(null);
       window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
     } catch (e) { setError(e instanceof Error ? e.message : 'Error inesperado.'); }

@@ -21,9 +21,12 @@ Living product/architecture spec: `docs/GRAPIFY_BETA_SPEC.md`
 - explicit provider attribution with `usedInReport`
 - shared-backend adapter
 - server-side Gemini fallback
+- HEVC-compatible frame selection and server-rendered evidence JPEGs for PDF
+- visible analysis ETA, elapsed time and phase-by-phase progress
+- HTTPS public entry point provisioned through CloudFront for Android/iOS
 - CI + Docker build
 - AWS deploy through GitHub OIDC
-- ECR + ECS/Fargate + ALB
+- CloudFront + ECR + ECS/Fargate + ALB
 - public health endpoint
 
 ## Product rule

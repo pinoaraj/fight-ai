@@ -27,14 +27,15 @@ Codex must be connected to the same GitHub account/repository with permission to
 
 ### AWS
 
-Current beta architecture: GitHub Actions OIDC → Amazon ECR → Application Load Balancer → ECS Fargate.
+Current beta architecture: GitHub Actions OIDC → Amazon ECR → ECS Fargate → Application Load Balancer origin → CloudFront HTTPS entry point.
 
 - AWS account: use the account already authorized by the GitHub OIDC role; do not hard-code account credentials.
 - ECS / ALB region: `sa-east-1`
 - ECR region: `us-east-2`
 - GitHub deploy IAM role: `FightAIGitHubDeployRole`
 - ECS task execution role: `FightAIEcsTaskExecutionRole`
-- Current public beta URL: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`
+- ALB origin/debug URL: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`
+- Public mobile URL: the `https://*.cloudfront.net` domain printed by the current deploy workflow. The workflow subscribes it to the CloudFront FREE plan with its required WAF ACL; do not share the ALB HTTP URL with Android/iOS users.
 - ALB idle timeout for long analysis: 1200 seconds
 - Current ECS task sizing for web beta: 1 vCPU / 3 GB RAM; Node heap capped near 2304 MB
 
@@ -62,7 +63,10 @@ Large-video direct-Gemini flow is intentionally split:
 1. browser sends raw video bytes to `/api/upload` with content type + size/name headers;
 2. server streams the incoming request body to Gemini resumable upload without `arrayBuffer()` duplication;
 3. browser sends the returned Gemini file reference plus fighter/context fields to `/api/analyze-uploaded`;
-4. server waits for ACTIVE state and generates the report.
+4. browser starts `/api/analyze-uploaded?async=1`; server waits for ACTIVE state and generates the report in a short-lived in-memory job;
+5. browser polls the job endpoint until it receives the final report.
+
+This async wrapper exists because CloudFront custom origins have a finite response timeout. It avoids holding a viewer POST open while Gemini reviews a long sparring. It is beta-grade only: jobs do not survive an ECS restart or browser reload, so keep the planned durable queue/job store on the roadmap.
 
 For browser-incompatible codecs (notably HEVC Main 10), `/api/preview-frame` creates the selectable JPEG and `/api/evidence-frames` creates up to four JPEG evidence thumbnails at the report's own timestamps. The source bytes are staged only on ephemeral task storage and removed after extraction; these thumbnails let the print/PDF view retain real video evidence instead of fabricated placeholders.
 

@@ -12,6 +12,21 @@ type UploadedAnalysisRequest = {
   analysis_focus?: string; custom_focus?: string;
 };
 
+type ReportPayload = {
+  mode: 'real'; provider: 'Gemini'; usedInReport: true; summary: string;
+  strengths: string[]; priorities: string[]; opponent: string[]; plan: string[]; drills: string[];
+  evidence: { time: string; title: string; observation: string; correction: string }[];
+  timings: { preprocessing_ms: number; gemini_processing_ms: number; analysis_ms: number; total_ms: number; clip_count: number };
+};
+type AnalysisJob = {
+  id: string; status: 'preparing' | 'coaching' | 'complete' | 'failed'; updatedAt: number;
+  report?: ReportPayload; error?: string;
+};
+
+const jobScope = globalThis as typeof globalThis & { __fightAiUploadedJobs?: Map<string, AnalysisJob> };
+const jobs = jobScope.__fightAiUploadedJobs ?? new Map<string, AnalysisJob>();
+jobScope.__fightAiUploadedJobs = jobs;
+
 const coachingSchema = {
   type: 'object', properties: {
     summary: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
@@ -69,19 +84,18 @@ function val(data: UploadedAnalysisRequest, key: keyof UploadedAnalysisRequest, 
   const value = data[key]; return typeof value === 'string' ? value.trim() : fallback;
 }
 
-export async function POST(req: NextRequest) {
+async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (status: AnalysisJob['status']) => void): Promise<ReportPayload> {
   const startedAt = Date.now();
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
-    const data = await req.json() as UploadedAnalysisRequest;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
     const fileName = val(data, 'fileName'); const fileUri = val(data, 'fileUri'); const mimeType = val(data, 'mimeType', 'video/mp4');
-    if (!fileName || !fileUri) return NextResponse.json({ error: 'Falta la referencia del video cargado.' }, { status: 400 });
+    if (!fileName || !fileUri) throw new Error('Falta la referencia del video cargado.');
     if (!fileName.startsWith('files/') || !/^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri)) {
-      return NextResponse.json({ error: 'Referencia de video no válida.' }, { status: 400 });
+      throw new Error('Referencia de video no válida.');
     }
 
     const processingStartedAt = Date.now();
+    updateJob?.('preparing');
     let state = 'PROCESSING';
     const deadline = Date.now() + 8 * 60 * 1000;
     while (state !== 'ACTIVE' && Date.now() < deadline) {
@@ -135,6 +149,7 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
 
     const geminiProcessingMs = Date.now() - processingStartedAt;
     const analysisStartedAt = Date.now();
+    updateJob?.('coaching');
     const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
     const list = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
     const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.filter(x => x && typeof x === 'object').map(x => {
@@ -142,7 +157,7 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
       return { time: typeof item.time === 'string' ? item.time : '00:00', title: typeof item.title === 'string' ? item.title : 'Evidencia', observation: typeof item.observation === 'string' ? item.observation : '', correction: typeof item.correction === 'string' ? item.correction : '' };
     }).filter(x => /^\d{1,2}:\d{2}$/.test(x.time) && x.observation) : [];
 
-    return NextResponse.json({
+    return {
       mode: 'real', provider: 'Gemini', usedInReport: true,
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Análisis completado con Gemini.',
       strengths: list(parsed.strengths), priorities: list(parsed.priorities).slice(0, 3), opponent: list(parsed.opponent),
@@ -154,9 +169,39 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
         total_ms: Date.now() - startedAt,
         clip_count: 1,
       },
-    });
+    };
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const data = await req.json() as UploadedAnalysisRequest;
+    if (new URL(req.url).searchParams.get('async') === '1') {
+      const id = crypto.randomUUID();
+      const job: AnalysisJob = { id, status: 'preparing', updatedAt: Date.now() };
+      jobs.set(id, job);
+      void completeAnalysis(data, (status) => {
+        job.status = status;
+        job.updatedAt = Date.now();
+      }).then((report) => {
+        job.status = 'complete'; job.report = report; job.updatedAt = Date.now();
+      }).catch((error) => {
+        console.error('Fight AI uploaded-file async analysis error', error);
+        job.status = 'failed'; job.error = error instanceof Error ? error.message : 'No se pudo completar el análisis.'; job.updatedAt = Date.now();
+      });
+      return NextResponse.json({ id, status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    }
+    return NextResponse.json(await completeAnalysis(data));
   } catch (error) {
     console.error('Fight AI uploaded-file analysis error', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'No se pudo completar el análisis.' }, { status: 502 });
   }
+}
+
+export async function GET(req: NextRequest) {
+  const id = new URL(req.url).searchParams.get('id') || '';
+  const job = jobs.get(id);
+  if (!job) return NextResponse.json({ error: 'El trabajo no está disponible. Puedes reintentar sin volver a subir el video.' }, { status: 404 });
+  if (job.status === 'complete' && job.report) return NextResponse.json({ status: job.status, report: job.report }, { headers: { 'Cache-Control': 'no-store' } });
+  if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error || 'No se pudo completar el análisis.' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json({ status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
 }

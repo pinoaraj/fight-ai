@@ -81,6 +81,7 @@ The current upgraded web flow contains:
 - discipline, stance and language;
 - selectable virtual-coach focus areas: boxing technique, weaknesses, strategy, defense, offense, footwork, distance/timing plus custom focus text;
 - visible elapsed analysis time and multi-stage analysis state;
+- an explicit expected wait message before analysis (normally 2–5 minutes for a 3-minute sparring), live elapsed time, current work phase and “still working” guidance for long/HEVC videos;
 - explicit Gemini/provider badge showing whether the provider participated in the current report;
 - clinical report sections: diagnosis, strengths to preserve, top priorities, opponent reading, tactical plan and drills;
 - Visual Coach correction panel;
@@ -122,7 +123,9 @@ The direct Gemini path now requires a higher clinical-coaching standard. Prompt 
 ## 7. Video speed / large-file path
 A key user-facing problem is analysis latency on real sparring files. The deployed beta path separates browser upload from the analysis request: the browser streams the video body to `/api/upload`, the server forwards that stream to Gemini's resumable upload endpoint without first materializing a second full `video.arrayBuffer()`, then `/api/analyze-uploaded` analyzes the returned Gemini file reference. This reduces memory pressure/copy overhead and avoids resending the same video bytes with the analysis request.
 
-Gemini file preparation polling allows up to 8 minutes for large files. The UI displays elapsed time and progressive stages such as upload/preparation, fighter identification, pattern reading, opponent/strategy analysis and report construction instead of appearing frozen.
+Gemini file preparation polling allows up to 8 minutes for large files. The UI displays an estimate before starting, elapsed time and progressive stages such as upload/preparation, fighter identification, pattern reading, opponent/strategy analysis and report construction instead of appearing frozen.
+
+For the HTTPS mobile entry point, `/api/analyze-uploaded?async=1` returns a short-lived job ID immediately. The browser polls the same route for `preparing`, `coaching`, `complete` or `failed`, so CloudFront never needs to hold a single long POST response open. The job state is intentionally in-memory for this beta and is not reload-/task-restart-safe; the uploaded Gemini reference is retained in the browser session so the user can retry without re-uploading.
 
 Production verification on 2026-08-29 exercised the browser-equivalent path against the public AWS beta: `/api/health` returned `analysisReady: true` and `geminiConfigured: true`; `/api/upload` returned a valid Gemini file reference; `/api/analyze-uploaded` returned a real Gemini report with `usedInReport: true`, non-empty priorities and four timestamp evidence items. This materially fixes the previous long-video request/memory path for the beta.
 
@@ -131,7 +134,7 @@ This is still not the final durable asynchronous architecture. A future producti
 ## 8. Evidence and PDF
 Timestamp evidence must be reproducible against the same uploaded local video. Clicking evidence seeks the preview to the parsed `MM:SS` time and attempts playback after the seek completes.
 
-The web client captures up to four evidence frames locally from the uploaded video using a hidden video/canvas pipeline. Those frames are displayed beside timestamp findings and are included by the print stylesheet when exporting/saving the report as PDF.
+The web client captures up to four evidence frames locally from the uploaded video using a hidden video/canvas pipeline. If Chrome cannot paint the codec, it sends the source once to `/api/evidence-frames`, which stages it ephemerally and uses FFmpeg to generate JPEGs at the report timestamps. Those real frames are displayed beside timestamp findings and are included by the print stylesheet when exporting/saving the report as PDF.
 
 If a timestamp has no verifiable frame or the browser cannot decode it, the product should show a placeholder rather than fabricate an image.
 
@@ -188,20 +191,20 @@ The updated Playwright agent covers:
 A build is not release-ready if this gate fails. A fake byte buffer that merely creates a `<video>` element is not considered a valid preview test.
 
 ## 11. AWS beta architecture
-Current production path:
+Current origin path:
 - private ECR `fight-ai-web`
 - ECS Fargate
 - internet-facing ALB
 - container port 3000
-- ALB HTTP 80 for beta
+- ALB HTTP 80 as the CloudFront origin
+- CloudFront default `*.cloudfront.net` HTTPS domain with HTTP→HTTPS redirect for public Android/iOS access; deployment subscribes the distribution plus its default-allow WAF ACL to the CloudFront FREE plan (1M requests / 100 GB monthly allowance)
 - `/api/health`
 - GitHub Actions OIDC
 - deployment role `FightAIGitHubDeployRole`
 - task execution role `FightAIEcsTaskExecutionRole`
 - cluster/service/task family `fight-ai-web`
 
-Current public beta endpoint:
-`http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`
+The deployment workflow provisions/reuses the CloudFront distribution labeled `fight-ai-web-https`, waits for it to deploy and prints its HTTPS domain. The ALB DNS is an origin/debug endpoint, not the user-facing URL.
 
 The repository uses a custom GitHub OIDC subject template; IAM trust is working and deployments authenticate through short-lived OIDC credentials.
 
@@ -219,7 +222,7 @@ Verified release deployment `b59668a4a54a1977d5b96369eed219265afbd25a` completed
 - no invented statistics.
 
 ## 13. Production hardening
-- HTTPS + ACM + port 443 before general public release;
+- replace the temporary CloudFront domain with a registered product domain and ACM certificate when the brand domain is chosen;
 - asynchronous private large-video upload/job architecture with persistent queue/job IDs;
 - persistent progress/retry state that survives page reloads and worker restarts;
 - CloudWatch logs/metrics;
@@ -233,6 +236,7 @@ The 2026-08-29 web beta upgrade is **materially fixed, validated and deployed fo
 2. AWS deployment `b59668a4a54a1977d5b96369eed219265afbd25a` succeeded through GitHub OIDC, ECR and ALB/ECS and passed public runtime verification;
 3. public `/api/health` reports `analysisReady: true` and `geminiConfigured: true`;
 4. the browser-equivalent streaming production smoke successfully ran `/api/upload` followed by `/api/analyze-uploaded` and produced a real Gemini report with `provider: Gemini`, `usedInReport: true`, priorities and four evidence items;
-5. deployed application code contains visible-frame fighter anchor selection, fighter descriptors, coach-focus controls, staged progress, evidence replay/frame capture, PDF image support and visual correction content.
+5. deployed application code contains visible-frame fighter anchor selection, HEVC-compatible frames, fighter descriptors, coach-focus controls, staged progress with expected wait guidance, evidence replay/frame capture, PDF image support and visual correction content;
+6. CloudFront HTTPS provisioning is part of the deployment workflow; confirm its generated domain after the first deployment before sharing the public mobile URL.
 
 Remaining work is production hardening rather than a blocker for this beta: the current two-step streaming/reference flow still holds the analysis request open and does not yet provide durable asynchronous background jobs, persisted retry/progress state or reload-safe job IDs.
