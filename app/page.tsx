@@ -67,6 +67,8 @@ export default function Home() {
   const [fighterNotes, setFighterNotes] = useState('');
   const [anchor, setAnchor] = useState<Anchor>(null);
   const [marking, setMarking] = useState(false);
+  const [previewReady, setPreviewReady] = useState(false);
+  const [previewTime, setPreviewTime] = useState(0);
   const [focuses, setFocuses] = useState<string[]>(['technique','weaknesses','strategy']);
   const [customFocus, setCustomFocus] = useState('');
   const [report, setReport] = useState<Report | null>(null);
@@ -100,13 +102,31 @@ export default function Home() {
   }, [report, videoUrl]);
 
   function selectVideo(file: File | null) {
-    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setError(''); setReplayStatus('');
+    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewTime(0); setError(''); setReplayStatus('');
   }
   function toggleFocus(id: string) { setFocuses(x => x.includes(id) ? x.filter(v => v !== id) : [...x, id]); }
+  function primePreview(node: HTMLVideoElement) {
+    node.pause();
+    const duration = Number.isFinite(node.duration) ? node.duration : 0;
+    const target = duration > 0 ? Math.min(Math.max(duration * 0.035, 0.8), Math.min(4, Math.max(0, duration - .15))) : .8;
+    const done = () => { setPreviewReady(true); setPreviewTime(node.currentTime || target); };
+    node.addEventListener('seeked', done, { once: true });
+    try { node.currentTime = target; } catch { setPreviewReady(node.readyState >= 2); }
+  }
+  function toggleMarking() {
+    const node = videoRef.current;
+    if (node) {
+      node.pause();
+      if (!previewReady || node.currentTime < .05) primePreview(node);
+      else setPreviewTime(node.currentTime);
+    }
+    setMarking(x => !x);
+  }
   function setAnchorFromEvent(e: React.MouseEvent<HTMLDivElement>) {
     const r = e.currentTarget.getBoundingClientRect();
     setAnchor({ x: ((e.clientX-r.left)/r.width)*100, y: ((e.clientY-r.top)/r.height)*100, size: anchor?.size || 24 });
     setMarking(false);
+    setPreviewTime(videoRef.current?.currentTime || previewTime);
   }
 
   async function analyze() {
@@ -119,7 +139,7 @@ export default function Home() {
       body.append('athlete_marker', anchor ? 'visual_anchor' : 'visual_reid');
       body.append('glove_color', gloveColor); body.append('top_color', topColor); body.append('relative_height', relativeHeight);
       body.append('build', build); body.append('fighter_notes', fighterNotes); body.append('analysis_focus', focuses.join(',')); body.append('custom_focus', customFocus);
-      if (anchor) { body.append('anchor_x', anchor.x.toFixed(2)); body.append('anchor_y', anchor.y.toFixed(2)); body.append('anchor_size', anchor.size.toFixed(2)); }
+      if (anchor) { body.append('anchor_x', anchor.x.toFixed(2)); body.append('anchor_y', anchor.y.toFixed(2)); body.append('anchor_size', anchor.size.toFixed(2)); body.append('anchor_time', previewTime.toFixed(2)); }
       const response = await fetch('/api/analyze', { method: 'POST', body });
       const raw = await response.text(); let data: Report | { error?: string } | null = null;
       try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
@@ -154,11 +174,11 @@ export default function Home() {
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Selecciona y revisa tu sparring" />
       <input data-testid="video-input" ref={inputRef} hidden type="file" accept="video/*" onChange={e => selectVideo(e.target.files?.[0] || null)} />
-      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="uploadIcon">＋</span><strong>SUBIR SPARRING</strong><span>MP4, MOV o compatible</span></button> : <div className="videoWrap"><div className="videoStage"><video data-testid="video-preview" ref={videoRef} src={videoUrl} controls playsInline/>{anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" onClick={setAnchorFromEvent}><span>Haz clic sobre el centro del peleador</span></div>}</div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
+      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="uploadIcon">＋</span><strong>SUBIR SPARRING</strong><span>MP4, MOV o compatible</span></button> : <div className="videoWrap"><div className={`videoStage ${marking?'isMarking':''}`}><video data-testid="video-preview" ref={videoRef} src={videoUrl} controls={!marking} playsInline preload="auto" onLoadedMetadata={e=>primePreview(e.currentTarget)} onSeeked={e=>{if(!marking)setPreviewTime(e.currentTarget.currentTime)}}/>{anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" data-testid="marker-overlay" onClick={setAnchorFromEvent}><span>Haz clic sobre el centro del peleador</span></div>}</div><div className="previewHint" data-testid="preview-status"><b>{previewReady?'FRAME VISIBLE LISTO':'CARGANDO FRAME…'}</b><span>{previewReady?'Mueve la barra del video al momento donde mejor se vea el peleador y luego presiona “Marcar peleador”.':'Fight AI está buscando automáticamente un frame visible para que no marques sobre una pantalla negra.'}</span></div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
 
-      <SectionTitle n="02" title="SELECCIONA AL PELEADOR" subtitle="Circula al peleador como en Android" extraClass="fighterTitle" />
-      <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video} onClick={() => setMarking(x=>!x)}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>setAnchor(null)}>Limpiar</button>}</div>
-      {anchor && <label className="rangeLabel">Tamaño del círculo<input type="range" min="12" max="48" value={anchor.size} onChange={e=>setAnchor({...anchor,size:Number(e.target.value)})}/></label>}
+      <SectionTitle n="02" title="SELECCIONA AL PELEADOR" subtitle="Pausa en un frame claro y circula al peleador como en Android" extraClass="fighterTitle" />
+      <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video||!previewReady} onClick={toggleMarking}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>setAnchor(null)}>Limpiar</button>}</div>
+      {anchor && <><div className="anchorConfirmed">✓ Peleador marcado en {Math.floor(previewTime/60)}:{String(Math.floor(previewTime%60)).padStart(2,'0')}</div><label className="rangeLabel">Tamaño del círculo<input type="range" min="12" max="48" value={anchor.size} onChange={e=>setAnchor({...anchor,size:Number(e.target.value)})}/></label></>}
 
       <SectionTitle n="03" title="CARACTERÍSTICAS" subtitle="Ayuda al motor a mantener la identidad" extraClass="optionsTitle" />
       <div className="identityGrid"><label>Color de guantes<input data-testid="glove-color" value={gloveColor} onChange={e=>setGloveColor(e.target.value)} placeholder="Ej. rojos"/></label><label>Ropa / polera<input value={topColor} onChange={e=>setTopColor(e.target.value)} placeholder="Ej. polera negra"/></label><label>Altura relativa<select value={relativeHeight} onChange={e=>setRelativeHeight(e.target.value)}><option value="">No sé</option><option value="shorter">Más bajo</option><option value="similar">Similar</option><option value="taller">Más alto</option></select></label><label>Contextura<select value={build} onChange={e=>setBuild(e.target.value)}><option value="">No sé</option><option value="slim">Delgada</option><option value="medium">Media / atlética</option><option value="stocky">Robusta</option></select></label><label className="wide">Otras características<textarea data-testid="fighter-notes" value={fighterNotes} onChange={e=>setFighterNotes(e.target.value)} placeholder="Ej. más bajo, pelo corto, shorts negros, protector rojo…"/></label></div>
