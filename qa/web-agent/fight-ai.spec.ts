@@ -7,16 +7,31 @@ function realVideo() {
   return { name: 'agent-sparring.mp4', mimeType: 'video/mp4', buffer: Buffer.from(source, 'base64') };
 }
 
-test('virtual athlete can navigate rich demo coaching report', async ({ page }) => {
+test('virtual athlete can navigate rich demo coaching report with playable evidence', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Tu sparring/i })).toBeVisible();
-  await page.getByRole('button', { name: 'VER REPORTE DEMO' }).click();
+  await page.getByTestId('demo-report-button').click();
   await expect(page.getByTestId('report-content')).toBeVisible();
   await expect(page.getByText('DIAGNÓSTICO PRINCIPAL', { exact: true })).toBeVisible();
   await expect(page.getByTestId('provider-badge')).toContainText('NO PARTICIPÓ');
   await expect(page.getByTestId('report-content').getByText('VISUAL COACH', { exact: true })).toBeVisible();
   await expect(page.getByText('VIDEOS DE CORRECCIÓN', { exact: true })).toBeVisible();
-  await expect(page.getByTestId('evidence-item').first()).toBeVisible();
+  await expect(page.getByTestId('printable-diagrams')).toBeVisible();
+  await expect(page.getByTestId('demo-video-section')).toBeVisible();
+  const demoVideo = page.getByTestId('demo-video');
+  await expect(demoVideo).toBeVisible();
+  await expect.poll(async () => demoVideo.evaluate((node: HTMLVideoElement) => ({ readyState: node.readyState, width: node.videoWidth, height: node.videoHeight })), { timeout: 15_000 }).toMatchObject({ readyState: 4 });
+  const demoMedia = await demoVideo.evaluate((node: HTMLVideoElement) => ({ width: node.videoWidth, height: node.videoHeight }));
+  expect(demoMedia.width).toBeGreaterThan(0);
+  expect(demoMedia.height).toBeGreaterThan(0);
+
+  const evidence = page.getByTestId('evidence-item').first();
+  await expect(evidence).toBeVisible();
+  await evidence.click();
+  const evidenceVideo = page.getByTestId('evidence-video');
+  await expect(evidenceVideo).toBeVisible();
+  await page.getByTestId('replay-selected').click();
+  await expect.poll(async () => evidenceVideo.evaluate((node: HTMLVideoElement) => node.currentTime), { timeout: 10_000 }).toBeGreaterThan(.5);
   await expect(page.getByTestId('print-report')).toContainText('PDF');
 });
 
@@ -26,17 +41,11 @@ test('real video decodes to a visible selection frame and fighter can be circled
   const preview = page.getByTestId('video-preview');
   await expect(preview).toBeVisible();
   await expect(page.getByTestId('preview-status')).toContainText('FRAME VISIBLE LISTO', { timeout: 15_000 });
-  const media = await preview.evaluate((node: HTMLVideoElement) => ({
-    readyState: node.readyState,
-    width: node.videoWidth,
-    height: node.videoHeight,
-    time: node.currentTime,
-  }));
+  const media = await preview.evaluate((node: HTMLVideoElement) => ({ readyState: node.readyState, width: node.videoWidth, height: node.videoHeight, time: node.currentTime }));
   expect(media.readyState).toBeGreaterThanOrEqual(2);
   expect(media.width).toBeGreaterThan(0);
   expect(media.height).toBeGreaterThan(0);
   expect(media.time).toBeGreaterThan(0);
-
   await page.getByTestId('mark-fighter').click();
   const overlay = page.getByTestId('marker-overlay');
   await expect(overlay).toBeVisible();
@@ -64,6 +73,7 @@ test('virtual athlete can identify fighter choose coach focus and submit analysi
   await expect(page.getByText('Mock backend contract OK', { exact: true })).toBeVisible();
   await expect(page.getByTestId('evidence-item')).toHaveCount(2);
   await expect(page.getByTestId('print-report')).toBeVisible();
+  await expect(page.getByTestId('printable-diagrams')).toBeVisible();
 });
 
 test('mobile agent sees touch-safe single-column flow without horizontal overflow', async ({ page }, testInfo) => {
@@ -72,7 +82,7 @@ test('mobile agent sees touch-safe single-column flow without horizontal overflo
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
   expect(overflow).toBeFalsy();
   await expect(page.getByTestId('upload-button')).toBeVisible();
-  await page.getByRole('button', { name: 'VER REPORTE DEMO' }).click();
+  await page.getByTestId('demo-report-button').click();
   await expect(page.getByTestId('report-content')).toBeVisible();
   const reportBox = await page.getByTestId('report-panel').boundingBox();
   expect(reportBox?.width || 0).toBeLessThanOrEqual(430);
