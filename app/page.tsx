@@ -42,7 +42,14 @@ const demo: Report = {
   ],
 };
 
-const processingSteps = ['Subiendo video', 'Preparando video para IA', 'Identificando al peleador', 'Leyendo patrones técnicos', 'Analizando rival y estrategia', 'Construyendo coaching'];
+const processingSteps = [
+  { title: 'Subiendo video de forma segura', detail: 'Estamos enviando el archivo una sola vez. Mantén esta pestaña abierta.', typical: 'Suele tomar 15–60 s' },
+  { title: 'Preparando video para IA', detail: 'Gemini está convirtiendo el video en una referencia lista para revisar.', typical: 'Suele tomar 30–90 s' },
+  { title: 'Confirmando al peleador marcado', detail: 'Usamos tu marca, guantes y rasgos para mantener la misma identidad.', typical: 'En curso' },
+  { title: 'Leyendo patrones técnicos', detail: 'El coach revisa distancia, defensa, base, salidas y decisiones repetidas.', typical: 'En curso' },
+  { title: 'Analizando rival y estrategia', detail: 'Estamos conectando los momentos visibles con correcciones concretas.', typical: 'En curso' },
+  { title: 'Construyendo tu reporte', detail: 'Ordenamos prioridades, drills, evidencia y las capturas para PDF.', typical: 'Último paso' },
+];
 
 function seconds(time: string) {
   const parts = time.split(':').map(Number);
@@ -116,7 +123,14 @@ export default function Home() {
   const reportRef = useRef<HTMLElement>(null);
   const videoUrl = useMemo(() => (video ? URL.createObjectURL(video) : ''), [video]);
   const reportVideoSrc = report?.mode === 'demo' ? '/api/demo-video' : videoUrl;
-  const processingStep = Math.min(processingSteps.length - 1, Math.max(stageFloor, Math.floor(elapsed / 32)));
+  const elapsedStage = elapsed < 20 ? 0 : elapsed < 70 ? 1 : elapsed < 115 ? 2 : elapsed < 165 ? 3 : elapsed < 220 ? 4 : 5;
+  const processingStep = Math.min(processingSteps.length - 1, Math.max(stageFloor, elapsedStage));
+  const elapsedLabel = elapsed < 60 ? `${elapsed}s transcurridos` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s transcurridos`;
+  const waitGuidance = elapsed < 120
+    ? 'Un sparring de 3 minutos suele requerir entre 2 y 5 minutos en total.'
+    : elapsed < 300
+      ? 'Seguimos trabajando. Los videos HEVC o de mayor duración pueden tardar algunos minutos más.'
+      : 'El análisis sigue activo. No necesitas volver a subir el video; puedes mantener esta pestaña abierta.';
   const identityReady = Boolean(anchor || gloveColor || topColor || fighterNotes.trim());
   const workflowStep = report || busy ? 5 : !video ? 1 : !anchor ? 2 : !identityReady ? 3 : 4;
 
@@ -333,8 +347,9 @@ export default function Home() {
       <label className="customFocus">Objetivo personalizado<textarea value={customFocus} onChange={e=>setCustomFocus(e.target.value)} placeholder="Ej. quiero saber por qué me conectan al entrar, cómo cerrar mejor la distancia y qué estrategia usar contra este rival."/></label>
       <SectionTitle n="05" title="CONFIGURACIÓN" subtitle="Contexto del análisis" extraClass="optionsTitle" />
       <div className="analysisOptions"><label>Disciplina<select data-testid="sport-select" value={sport} onChange={e=>setSport(e.target.value as 'boxing'|'kickboxing')}><option value="boxing">Boxeo</option><option value="kickboxing">Kickboxing</option></select></label><label>Guardia<select data-testid="stance-select" value={stance} onChange={e=>setStance(e.target.value as 'orthodox'|'southpaw'|'switch')}><option value="orthodox">Ortodoxa</option><option value="southpaw">Zurda</option><option value="switch">Switch</option></select></label><label>Idioma<select value={language} onChange={e=>setLanguage(e.target.value as 'es'|'en')}><option value="es">Español</option><option value="en">English</option></select></label></div>
+      <div className="analysisTiming"><b>TIEMPO ESTIMADO</b><span>Un sparring de 3 min suele tardar 2–5 min. Los videos largos o HEVC pueden demorar más.</span></div>
       <button data-testid="analyze-button" className="primary" disabled={busy||!video} onClick={analyze}>{busy?'ANALIZANDO SPARRING…':'ANALIZAR SPARRING'}<span>→</span></button>
-      {busy && <div className="processingCard" data-testid="processing-state"><div className="spinner"/><div><b>{processingSteps[processingStep]}</b><span>{elapsed<60?`${elapsed}s transcurridos`:`${Math.floor(elapsed/60)}m ${elapsed%60}s transcurridos`} · el archivo se carga una sola vez y luego Gemini analiza la referencia preparada.</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
+      {busy && <div className="processingCard" data-testid="processing-state" role="status" aria-live="polite"><div className="spinner"/><div><div className="processingMeta"><b>TRABAJANDO · {processingSteps[processingStep].typical}</b><time>{elapsedLabel}</time></div><strong>{processingSteps[processingStep].title}</strong><span>{processingSteps[processingStep].detail} {waitGuidance}</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
       {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span>{uploadedSession && !busy && <button data-testid="retry-uploaded-analysis" onClick={retryUploadedAnalysis}>REINTENTAR ANÁLISIS SIN VOLVER A SUBIR</button>}</div>}
     </aside>
     <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>REPORTE DE COACHING</span><div className="emptyRing">◎</div><h2>Un plan claro para tu próxima sesión</h2><p>Sube el round, identifica a tu atleta y recibe tres prioridades con evidencia que puedes volver a reproducir.</p><div className="emptyTags"><span>01 · MOMENTOS VISIBLES</span><span>02 · CORRECCIONES CONCRETAS</span><span>03 · DRILLS Y PLAN VS RIVAL</span></div><div className="pdfPreview">↓ TU REPORTE INCLUIRÁ DESCARGA PDF</div><button data-testid="demo-report-button" className="emptyDemo" onClick={showDemo}>EXPLORAR REPORTE DEMO →</button></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc}/>}</section></section>
