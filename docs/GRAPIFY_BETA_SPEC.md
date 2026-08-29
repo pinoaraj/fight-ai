@@ -3,24 +3,22 @@
 _Last updated: 2026-08-29_
 
 ## 1. Product goal
-Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide concise coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
+Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
 
 ### Core coaching premise — clinical eye, not generic commentary
-Fight AI must analyze sparring as closely as possible to how an experienced combat-sports coach reviews a round. The engine should not merely label isolated mistakes; it should connect visible actions into recurring technical and tactical patterns, explain why those patterns matter in the matchup, identify what the opponent is exploiting or vulnerable to, and convert the highest-value findings into specific corrections, game-plan adjustments and drills.
+Fight AI must analyze sparring as closely as possible to how an experienced combat-sports coach reviews a round. The engine should connect visible actions into recurring technical and tactical patterns, explain why those patterns matter in the matchup, identify what the opponent is exploiting or vulnerable to, and convert the highest-value findings into specific corrections, game-plan adjustments and drills.
 
-The expected reasoning pattern for every report is:
-- observe what actually happened on video;
-- distinguish one-off moments from recurring patterns;
-- infer the technical/tactical cause only when evidence supports it;
-- prioritize the 2–3 issues that would most change performance rather than flooding the athlete with minor notes;
-- identify strengths that can be deliberately built into the game plan;
-- analyze opponent habits, preferred range, reactions and exploitable tendencies;
-- explain what to do differently, when to do it and why;
-- attach timestamp evidence and correction guidance;
-- turn corrections into drills and visual teaching aids tied to the detected mistake;
-- clearly label tactical hypotheses when certainty is lower.
+Required reasoning chain:
+- visible observation;
+- recurring pattern vs one-off moment;
+- likely technical/tactical cause when supported;
+- consequence in the exchange/matchup;
+- specific correction;
+- drill prescription;
+- timestamp evidence;
+- visual teaching aid when useful.
 
-A Fight AI report should feel like a real post-sparring coach review: concise, specific, contextual and actionable. Generic advice such as “keep your hands up” or “move your feet more” is insufficient unless the report explains the exact recurring context, consequence and correction visible in the footage.
+Generic advice such as “keep your hands up” or “move your feet more” is insufficient unless tied to exact recurring context, consequence and correction.
 
 ## 2. Shared analysis contract
 Every client consumes the same logical report schema:
@@ -33,183 +31,191 @@ Every client consumes the same logical report schema:
 - tactical/rematch plan
 - next-session goals
 - drills
-- timestamped evidence with confidence, observation, why-it-matters and correction
+- timestamped evidence with observation and correction
 
 Gemini may be credited only after an authenticated request succeeds and accepted evidence is present. CV/Pose and Video-AI sources must remain distinguishable.
 
 ## 3. Fighter identity
-Initial target selection is explicit. Re-identification uses visible cues such as glove/shirt color, relative height/build, stance and temporal continuity. LOW-confidence windows are excluded from evidence.
+Target selection must be explicit and Android-like. The preferred web flow is:
+1. upload/preview the video;
+2. visually circle/mark the fighter on the video frame;
+3. optionally adjust circle size;
+4. provide visible descriptors such as glove color, clothing, relative height, build and free-form notes;
+5. provide stance and discipline;
+6. keep identity through temporal continuity and descriptors;
+7. exclude low-confidence windows from evidence instead of silently switching fighters.
+
+Web multipart identity fields now include:
+- `athlete_marker`
+- `glove_color`
+- `top_color`
+- `relative_height`
+- `build`
+- `fighter_notes`
+- `anchor_x`
+- `anchor_y`
+- `anchor_size`
+- `stance`
 
 ## 4. Mobile baseline
-Current mobile beta work includes Android Expo, PDF report export/share, provider attribution gate, visual coaching demos, ES/EN language consistency and Android automated QA with real APK + virtual navigation agent.
+Android remains the interaction source of truth for fighter selection, provider attribution, visual correction guidance and report semantics. Web should mirror Android intent while adapting controls for browser use.
 
-Release gate: do not call the mobile beta release-ready until source validation, demos, APK build, Android navigation and authenticated Gemini proof all pass together.
-
-## 5. Web product parity — Android is the source of truth
+## 5. Web product parity
 Branch: `web/mvp`
 PR: #2
 Stack: Next.js 15.5.24 + React 19 + TypeScript.
 
-The web client is not a reduced or alternate Fight AI product. It must be a responsive browser mirror of the Android app. Android interaction flow, available analysis choices, report hierarchy, provider status, evidence, drills/visual coaching and export behavior are the product source of truth. Web-specific differences are allowed only when required by browser/platform constraints.
+### Current web analysis flow
+The current upgraded web flow contains:
+- responsive desktop/mobile workspace;
+- upload + local preview;
+- visual fighter circle/anchor on the video;
+- identity descriptors: glove color, clothing, height, build and free-form characteristics;
+- discipline, stance and language;
+- selectable virtual-coach focus areas: boxing technique, weaknesses, strategy, defense, offense, footwork, distance/timing plus custom focus text;
+- visible elapsed analysis time and multi-stage analysis state;
+- explicit Gemini/provider badge showing whether the provider participated in the current report;
+- clinical report sections: diagnosis, strengths to preserve, top priorities, opponent reading, tactical plan and drills;
+- Visual Coach correction panel;
+- correction-video references for detected footwork/angle issues;
+- timestamp evidence cards with frame captures generated from the uploaded video;
+- evidence click-to-seek/playback;
+- browser PDF/print export including evidence images;
+- responsive mobile layout.
 
-Required web parity flow:
-1. Home/analyze entry equivalent to Android.
-2. Choose/upload sparring video and preview/play it before analysis.
-3. Select the target fighter after video selection using practical identity anchors and visual re-identification.
-4. Select discipline, stance/guard, language and the same analysis inputs/options exposed by Android.
-5. Show a dedicated multi-stage processing state; long analysis must not look like a frozen request.
-6. Render the same coaching report structure and semantic priorities used by Android: main takeaway, strengths, weaknesses/priorities, opponent analysis, tactical/rematch plan, next-session goals, drills, evidence and correction guidance.
-7. Timestamp evidence must seek/play the uploaded video at the corresponding moment.
-8. Provider status must explicitly show whether Gemini/Video AI/CV/Pose participated in the current report; `usedInReport=true` remains mandatory before crediting a provider.
-9. Evidence/source details must be clear and navigable.
-10. Visual Coach examples/demos linked to detected mistakes must be available from the report where Android exposes them.
-11. Export/share a PDF coaching report from the web with the same information hierarchy as Android.
-12. Preserve ES/EN behavior: one selected language only, with no duplicated mixed-language analysis.
-13. Sessions/history/progress/profile surfaces should follow Android as those mobile features stabilize; web should not invent a conflicting navigation model.
+### Product acceptance criteria
+Web is not release-ready unless:
+- selected fighter can be identified visually or with descriptors;
+- analysis focus selections are sent to the engine and affect prompt context;
+- report clearly states if Gemini participated;
+- timestamps replay the local video;
+- PDF contains report content and captured evidence images when frames are available;
+- detected footwork/angle issues have useful visual/video correction references;
+- report quality is specific enough to feel like a real coach review rather than generic advice;
+- desktop and mobile virtual-agent tests pass.
 
-### Web interface state — 2026-08-29
-The web UI has been upgraded from the original technical MVP into a touch-first analysis workspace. Current implemented surfaces include:
-- responsive desktop/mobile top navigation and guided 5-step analysis flow;
-- stronger upload state with video preview/file metadata;
-- explicit visual fighter cards for red gloves, blue gloves and visual re-identification;
-- discipline, stance and language controls;
-- dedicated staged processing card with progress indicators;
-- report navigation and prominent “most important” coaching takeaway;
-- provider participation badge with truthful `usedInReport` semantics;
-- strengths, priorities, opponent reading, tactical plan and drills;
-- Visual Coach correction panel tied to priority #1;
-- clickable timestamp evidence that seeks the selected video;
-- browser print/PDF export surface;
-- responsive report layout and print stylesheet;
-- user-readable handling for non-JSON/ALB analysis failures.
+## 6. Gemini / analysis quality contract
+When the shared Fight AI backend is absent, the web server uses Gemini server-side. The browser never receives the Gemini key.
 
-Remaining product-parity work after public beta validation: richer fighter anchoring from video coordinates/frame selection, real correction motion demos instead of the current simplified Visual Coach diagram, persistent sessions/history/progress/profile, and production asynchronous large-video ingestion.
+The direct Gemini path now requires a higher clinical-coaching standard. Prompt requirements include:
+- identify only the selected fighter using anchor coordinates + descriptors + temporal continuity;
+- separate visible facts from tactical hypotheses;
+- inspect guard recovery, balance/base, weight transfer, entries, exits, head movement, defense after combinations, range, timing, pivots/angles, footwork, punch selection, rhythm, pressure, reactions to the jab, body work and decision-making when visible;
+- find recurring patterns across the video rather than isolated generic mistakes;
+- explain what the opponent is exploiting and what can be exploited in return;
+- return only the three highest-impact priorities;
+- make strengths strategically useful, not compliments;
+- prescribe drills tied to each priority with practical structure;
+- provide 4–8 timestamp evidence moments when the footage supports them;
+- produce a 4–7 sentence diagnostic summary containing style, main limiting pattern, opponent exploitation, useful strength and the #1 next-session change;
+- forbid invented exact punch counts, percentages or unsupported statistics.
 
-## 6. Shared backend and Gemini contract
-Preferred production path remains the shared Fight AI analysis backend via `FIGHT_AI_API_URL` and optional `FIGHT_AI_WEB_TOKEN`.
+## 7. Video speed / large-file path
+A key user-facing problem is analysis latency on real sparring files. The current direct Gemini upload has been improved by replacing `video.arrayBuffer()` with streaming from `File.stream()` to Gemini's resumable upload endpoint. This avoids creating a second full in-memory video buffer inside Next.js and reduces memory pressure/copy overhead for large uploads.
 
-If the shared backend is absent, the web server may use authenticated Gemini directly as a temporary analysis fallback. The browser never receives the Gemini key. The server uploads the selected video to Gemini Files API, waits for ACTIVE state, requests structured coaching JSON, and marks `provider: Gemini` + `usedInReport: true` only after a successful authenticated response and valid JSON parse.
+Gemini file preparation polling now allows up to 8 minutes for large files instead of the previous short fixed polling window. The UI displays elapsed time and progressive stages instead of appearing frozen.
 
-The Gemini/video-AI prompt and post-processing must enforce the clinical-coach premise above: visible facts first, recurring-pattern detection, matchup context, opponent habits, prioritized corrections, actionable drills and timestamp support. It must forbid invented exact punch counts and unsupported certainty.
+This is an optimization, not the final production architecture. The final large-video design should use private asynchronous ingestion + persistent jobs so the browser does not need to hold one request open for the entire upload/analysis lifecycle.
 
-For production-scale sparring uploads, the web path must not depend on holding a single synchronous HTTP request open while loading the entire file into Next.js memory. Large-video ingestion must move to an asynchronous/private upload path with explicit processing state and recoverable job status.
+## 8. Evidence and PDF
+Timestamp evidence must be reproducible against the same uploaded local video. Clicking evidence seeks the preview to the parsed `MM:SS` time and attempts playback after the seek completes.
 
-## 7. Web input contract
-Multipart/shared fields aligned with mobile include:
-- `video`
-- `language`
-- `sport`
-- `athlete_marker`
-- `glove_color` when known
-- `stance`
+The web client captures up to four evidence frames locally from the uploaded video using a hidden video/canvas pipeline. Those frames are displayed beside timestamp findings and are included by the print stylesheet when exporting/saving the report as PDF.
 
-Additional re-identification fields should support Android-equivalent fighter anchoring: `top_color`, `relative_height`, `build`, fighter anchor coordinates/selection and any persistent visual descriptor required by the shared backend.
+If a timestamp has no verifiable frame or the browser cannot decode it, the product should show a placeholder rather than fabricate an image.
 
-## 8. Visual coaching
-Detected mistakes should link to correction visuals. Product direction supports short motion demos, angle/trajectory graphics and simplified animated teaching examples. Visuals must correspond to the detected issue rather than generic boxing clips. Web and Android should expose the same correction intent even when playback UI differs by platform.
+## 9. Visual coaching
+Detected mistakes should link to teaching aids tied to the issue. Current web beta includes:
+- simplified entry/base/angle diagram;
+- correction-video embeds for footwork/pivot/angle topics when the report contains related priorities.
 
-The current web beta includes a simplified trajectory/base Visual Coach panel as an interim teaching aid. It is explicitly not the final visual-demo implementation.
+Long-term direction remains short mistake-specific motion demos, trajectory graphics and simplified animations matched to the athlete's detected error.
 
-## 9. QA matrix
-Before release, validate together:
-- Android↔Web feature-parity checklist
-- clinical-coach report quality
-- video upload/playback
-- target fighter selection after upload
-- visual fighter identity/re-identification persistence
-- discipline/stance/language controls
-- dedicated processing state
-- timestamp seeking
-- analysis rendering
-- main takeaway / strengths / priorities / opponent / tactical plan / next goals parity
-- asynchronous backend polling and legacy fallback
-- shared-backend adapter/runtime smoke
-- authenticated Gemini fallback
-- ES/EN consistency
-- provider labels + `usedInReport`
-- CV/Pose/Video-AI source labels and evidence toggle
-- drills and visual examples
-- PDF export/share
-- responsive desktop and mobile browser navigation
-- web TypeScript + production build
-- web Docker build
-- public `/api/health`
-- deployed `/api/analyze` authenticated Gemini smoke with `provider: Gemini` and `usedInReport: true`
-- real large sparring upload/report E2E
-- user-visible non-JSON handling for ALB/HTTP errors
+## 10. QA matrix
+Required combined web gate:
+- TypeScript
+- Next.js production build
+- shared-backend adapter/runtime QA
+- Playwright virtual web agents on desktop and Pixel-class mobile viewport
+- Docker production build
+- AWS OIDC
+- ECR push
+- ALB/ECS deployment
+- `/api/health`
+- real deployed Gemini smoke
+- provider attribution (`Gemini` + `usedInReport: true`)
+- fighter identity controls
+- coach-focus controls
+- processing state
+- evidence count/playback UI
+- PDF action
+- visual-coach correction content
+- mobile horizontal-overflow check
 
 ### Virtual web-agent gate
-Playwright is now part of Web MVP CI. The same production build is exercised by synthetic athlete journeys in Chromium using desktop and Pixel-class mobile viewports. The agent gate verifies:
-- landing/analyze navigation;
-- demo report rendering and truthful “IA no usada” state;
-- upload + preview;
-- fighter selection;
-- sport/stance configuration;
-- live multipart analysis against the deterministic shared-backend fixture;
-- staged processing visibility;
-- report rendering and provider attribution;
-- timestamp evidence count;
-- Visual Coach presence;
-- PDF/export action presence;
-- mobile layout without page-level horizontal overflow.
+The updated Playwright agent covers:
+- demo report and truthful provider state;
+- upload/preview;
+- fighter descriptor input;
+- coach focus selection including footwork;
+- sport/stance selection;
+- live multipart analysis against deterministic mock backend;
+- staged processing state;
+- report rendering;
+- provider attribution;
+- evidence cards;
+- correction-video section;
+- PDF action;
+- mobile responsive layout.
 
-A web build is not release-ready if the virtual agent gate fails, even if TypeScript/build/Docker pass.
+A build is not release-ready if this gate fails.
 
-Regression footage should stay outside normal public Git history whenever practical.
+## 11. AWS beta architecture
+Current production path:
+- private ECR `fight-ai-web`
+- ECS Fargate
+- internet-facing ALB
+- container port 3000
+- ALB HTTP 80 for beta
+- `/api/health`
+- GitHub Actions OIDC
+- deployment role `FightAIGitHubDeployRole`
+- task execution role `FightAIEcsTaskExecutionRole`
+- cluster/service/task family `fight-ai-web`
 
-## 10. AWS production architecture
-App Runner is not used: AWS stopped onboarding new App Runner customers on 2026-03-31, and this account receives `SubscriptionRequiredException` for App Runner.
+Current public beta endpoint:
+`http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`
 
-Current web production architecture:
-- container registry: private Amazon ECR `fight-ai-web`
-- runtime: Amazon ECS on AWS Fargate
-- ingress: internet-facing Application Load Balancer
-- container port: 3000
-- ALB listener: HTTP 80 for beta/test URL
-- health target: `/api/health`
-- GitHub Actions authentication: GitHub OIDC
-- deployment role: `FightAIGitHubDeployRole`
-- ECS task execution role: `FightAIEcsTaskExecutionRole`
-- cluster/service/task family: `fight-ai-web`
-- one Fargate task for beta
+The repository uses a custom GitHub OIDC subject template; the IAM trust has already been repaired and deployments are authenticated through short-lived OIDC credentials.
 
-The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
+The last previously verified release deployment completed public health + real Gemini smoke. The current UI/clinical-analysis upgrade must pass the same gate again before being called ready.
 
-### OIDC state — 2026-08-29
-This GitHub repository is configured with a custom OIDC subject template. The observed branch token subject is `repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/web/mvp`, not GitHub's default canonical subject. `infra/aws/repair-oidc-trust.ps1` was corrected to trust only that repository identity template for `web/mvp` and `main`, while preserving the existing ECS/ALB/ECR deployment permissions. After the manual trust update, the GitHub deployment role successfully passed the OIDC credential step again.
+## 12. Secret handling and security
+- no Gemini key in browser/client source;
+- no static AWS keys in repository;
+- GitHub Actions uses OIDC;
+- beta currently injects `GEMINI_API_KEY` server-side into ECS from the GitHub Actions secret because SSM/Secrets Manager are unavailable for this account;
+- migrate to managed AWS secret storage when available;
+- uploaded sparring should remain private by default;
+- minimize retention;
+- provider attribution must be truthful;
+- no invented statistics.
 
-Current public beta endpoint: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
+## 13. Production hardening
+- HTTPS + ACM + port 443 before general public release;
+- asynchronous private large-video upload/job architecture;
+- persistent progress/retry state;
+- CloudWatch logs/metrics;
+- shared CV/Pose backend via `FIGHT_AI_API_URL`;
+- richer generated visual correction demos;
+- session/history/progress surfaces aligned with Android.
 
-Deployment `6ebec8ca19082cd36144880f480de6205ac8de7a` passed the combined web release gate on 2026-08-29: Web MVP CI succeeded, GitHub OIDC authenticated, the immutable image was pushed to ECR, ALB/ECS Fargate stabilized, public `/api/health` returned `analysisReady: true` and `geminiConfigured: true`, and the deployed `/api/analyze` completed a real red-gloves sparring Gemini smoke with `provider: Gemini`, `usedInReport: true`, a non-empty summary and 4 timestamp evidence items.
+## 14. Current release state
+The current 2026-08-29 upgrade is **in validation**, not yet declared release-ready. The code now includes fighter circle/descriptor selection, coach-focus controls, richer clinical Gemini prompting, streaming upload to Gemini, elapsed analysis status, evidence screenshots, PDF image support, correction videos and expanded virtual-agent coverage.
 
-A deployed Gemini smoke must use a real sparring proof clip and pass only when the public `/api/analyze` response returns live Gemini attribution, `usedInReport: true`, a non-empty summary and timestamp evidence. A missing fixture or infrastructure-only health pass does not satisfy this gate.
-
-### Gemini runtime secret status
-AWS Secrets Manager and SSM Parameter Store currently return `SubscriptionRequiredException` for this account. For the beta deployment only, the GitHub Actions `GEMINI_API_KEY` secret is injected as a server-side ECS task environment variable. It is never committed to Git and is never sent to browser JavaScript. Migrate it to Secrets Manager/SSM when those services become available for the account.
-
-### Next production hardening
-- add HTTPS with ACM certificate + port 443 before general public launch
-- move Gemini key to AWS managed secret storage
-- implement private asynchronous large-video upload/job processing
-- add CloudWatch logs/metrics before external beta debugging
-- deploy the shared CV/Pose backend and set `FIGHT_AI_API_URL`
-
-## 11. Security / privacy
-- no Gemini key in client code or source control
-- no static AWS access keys in repository
-- GitHub Actions uses short-lived OIDC credentials
-- uploaded sparring video private by default
-- temporary/presigned access in production
-- minimize video retention
-- provider attribution must be truthful
-- no invented statistics or certainty
-
-## 12. Current release gate
-The current web beta passed the combined release gate on 2026-08-29 for deployment `6ebec8ca19082cd36144880f480de6205ac8de7a`:
-1. Web MVP CI passed TypeScript, production build, runtime adapter QA, desktop/mobile Playwright virtual agents and Docker build.
-2. AWS deploy passed OIDC → ECR → ALB → ECS Fargate and service stabilization.
-3. Public `/api/health` returned healthy with analysis readiness and Gemini configured.
-4. Public `/api/analyze` completed one genuine Gemini sparring smoke test with `provider: Gemini`, `usedInReport: true`, a non-empty summary and 4 timestamp evidence items.
-5. The refreshed responsive UI was the deployed build exercised by the release workflow.
-
-This beta is ready for controlled testing at the current public ALB URL. Production hardening items above still apply before general public launch.
+Final ready gate for this upgrade:
+1. latest Web MVP CI succeeds including desktop/mobile virtual agents and Docker;
+2. latest AWS deployment succeeds;
+3. public `/api/health` is healthy and Gemini configured;
+4. real deployed Gemini smoke succeeds with `provider: Gemini`, `usedInReport: true`, non-empty diagnosis and timestamp evidence;
+5. deployed UI contains fighter anchor/descriptors, coach focus, evidence replay, PDF image support and visual correction content.
