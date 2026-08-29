@@ -65,7 +65,7 @@ export async function POST(req: Request) {
   try {
     await pipeline(Readable.fromWeb(req.body as import('stream/web').ReadableStream), meter, createWriteStream(temporaryPath, { flags: 'wx' }));
     const image = await renderFrame(temporaryPath, at);
-    return new Response(image, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' } });
+    return new Response(new Uint8Array(image), { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' } });
   } catch (error) {
     const isTooLarge = error instanceof Error && error.message === 'video too large';
     return Response.json({ error: isTooLarge ? 'El video supera el límite para generar un frame compatible.' : 'No se pudo decodificar este video para generar un frame.' }, { status: isTooLarge ? 413 : 422 });
