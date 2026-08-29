@@ -4,6 +4,7 @@ import './upgrade.css';
 import './design.css';
 import './redesign.css';
 import './mobile-fix.css';
+import './upload-emphasis.css';
 
 export const metadata: Metadata = {
   title: 'Fight AI',

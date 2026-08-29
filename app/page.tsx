@@ -156,7 +156,18 @@ export default function Home() {
     setPreviewReady(true); setPreviewTime(target);
     return true;
   }
-  async function decodePreview(node = videoRef.current, allowCompatibleFrame = false): Promise<boolean> {
+  async function generateCompatibleFrame() {
+    setPreviewAttempting(true); setPreviewError('Generando un frame compatible para este formato de video…');
+    try {
+      if (await requestCompatibleFrame()) return true;
+      setPreviewReady(false); setPreviewError('No fue posible generar un frame compatible. Puedes identificar al atleta con sus características y continuar con el análisis.');
+      return false;
+    } catch {
+      setPreviewReady(false); setPreviewError('No fue posible generar un frame compatible. Puedes identificar al atleta con sus características y continuar con el análisis.');
+      return false;
+    } finally { setPreviewAttempting(false); }
+  }
+  async function decodePreview(node = videoRef.current, allowCompatibleFrame = true): Promise<boolean> {
     if (!node) return false;
     setPreviewAttempting(true); setPreviewError(''); node.muted = true;
     const target = frameTarget(node);
@@ -177,13 +188,12 @@ export default function Home() {
       void node.play().catch(() => check());
       check();
     });
-    setPreviewAttempting(false);
-    if (decoded) { setPreviewReady(true); setPreviewTime(node.currentTime || target); return true; }
+    if (decoded) { setPreviewAttempting(false); setPreviewReady(true); setPreviewTime(node.currentTime || target); return true; }
     if (allowCompatibleFrame) {
-      try {
-        if (await requestCompatibleFrame()) return true;
-      } catch { /* keep the local decode error below */ }
+      setPreviewError('Generando un frame compatible para este formato de video…');
+      try { if (await requestCompatibleFrame()) { setPreviewAttempting(false); return true; } } catch { /* keep the local decode error below */ }
     }
+    setPreviewAttempting(false);
     setPreviewReady(false);
     setPreviewError(allowCompatibleFrame
       ? 'No fue posible generar un frame compatible. Puedes identificar al atleta con sus características y continuar con el análisis.'
@@ -294,7 +304,7 @@ export default function Home() {
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Selecciona y revisa tu sparring" />
       <input data-testid="video-input" ref={inputRef} hidden type="file" accept="video/*" onChange={e => selectVideo(e.target.files?.[0] || null)} />
-      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="uploadIcon">＋</span><strong>SUBIR SPARRING</strong><span>MP4, MOV o compatible</span><small>Primero verás un frame claro antes de elegir al atleta.</small></button> : <div className="videoWrap"><div className="videoTask"><span>PASO 2 · IDENTIFICA A TU ATLETA</span><b>{previewReady?'Frame listo para marcar':'Preparando un frame verificable'}</b></div><div className={`videoStage ${marking?'isMarking':''}`}>{fallbackFrameUrl ? <img data-testid="compatible-frame" className="compatibleFrame" src={fallbackFrameUrl} alt="Frame compatible para marcar al peleador"/> : <video data-testid="video-preview" ref={videoRef} src={videoUrl} controls={!marking} playsInline muted preload="auto" onLoadedMetadata={e=>void decodePreview(e.currentTarget)}/>} {anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" data-testid="marker-overlay" onClick={setAnchorFromEvent}><span>Haz clic sobre el centro del peleador</span></div>}</div><div className="previewHint" data-testid="preview-status"><b>{previewReady?'FRAME VISIBLE LISTO':previewAttempting?'DECODIFICANDO FRAME…':'FRAME NO DISPONIBLE'}</b><span>{previewReady?'Busca el momento más claro con la barra y luego marca al atleta.':previewError}</span>{!previewReady && <button data-testid="decode-frame" onClick={()=>void decodePreview(undefined, true)} disabled={previewAttempting}>{previewAttempting?'GENERANDO FRAME…':'GENERAR FRAME COMPATIBLE'}</button>}</div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
+      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="uploadIcon">↑</span><strong>SUBE TU VIDEO DE SPARRING</strong><span className="dropCopy">Arrastra tu video aquí o haz clic para seleccionarlo</span><small>COMIENZA AQUÍ · MP4, MOV o formato compatible</small><span className="dropAction">ELEGIR VIDEO <b>→</b></span></button> : <div className="videoWrap"><div className="videoTask"><span>PASO 2 · IDENTIFICA A TU ATLETA</span><b>{previewReady?'Frame listo para marcar':'Preparando un frame verificable'}</b></div><div className={`videoStage ${marking?'isMarking':''}`}>{fallbackFrameUrl ? <img data-testid="compatible-frame" className="compatibleFrame" src={fallbackFrameUrl} alt="Frame compatible para marcar al peleador"/> : <video data-testid="video-preview" ref={videoRef} src={videoUrl} controls={!marking} playsInline muted preload="auto" onLoadedMetadata={e=>void decodePreview(e.currentTarget)}/>} {anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" data-testid="marker-overlay" onClick={setAnchorFromEvent}><span>Haz clic sobre el centro del peleador</span></div>}</div><div className="previewHint" data-testid="preview-status"><b>{previewReady?'FRAME VISIBLE LISTO':previewAttempting?'PREPARANDO FRAME COMPATIBLE…':'FRAME NO DISPONIBLE'}</b><span>{previewReady?'Busca el momento más claro con la barra y luego marca al atleta.':previewError}</span>{!previewReady && <button data-testid="decode-frame" onClick={()=>void generateCompatibleFrame()} disabled={previewAttempting}>{previewAttempting?'GENERANDO FRAME…':'REINTENTAR FRAME COMPATIBLE'}</button>}</div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
       <SectionTitle n="02" title="SELECCIONA AL PELEADOR" subtitle="Pausa en un frame claro y circula al peleador como en Android" extraClass="fighterTitle" />
       <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video} onClick={toggleMarking}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>setAnchor(null)}>Limpiar</button>}</div>
       {anchor && <><div className="anchorConfirmed">✓ Peleador marcado en {Math.floor(previewTime/60)}:{String(Math.floor(previewTime%60)).padStart(2,'0')}</div><label className="rangeLabel">Tamaño del círculo<input type="range" min="12" max="48" value={anchor.size} onChange={e=>setAnchor({...anchor,size:Number(e.target.value)})}/></label></>}
