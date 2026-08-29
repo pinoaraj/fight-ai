@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import time
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -26,6 +27,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get('content-length', '0'))
         if length:
             self.rfile.read(length)
+        time.sleep(0.45)
         self._send({'report': {
             'mainTakeaway': 'Mock backend contract OK',
             'strengths': [{'title': 'Jab', 'description': 'Visible', 'timestamps': [2]}],
