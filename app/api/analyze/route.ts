@@ -89,6 +89,94 @@ function cleanGeminiJson(text: string) {
   return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
+const coachingSchema = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    strengths: { type: 'array', items: { type: 'string' } },
+    priorities: { type: 'array', items: { type: 'string' } },
+    opponent: { type: 'array', items: { type: 'string' } },
+    plan: { type: 'array', items: { type: 'string' } },
+    drills: { type: 'array', items: { type: 'string' } },
+    evidence: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          time: { type: 'string' },
+          title: { type: 'string' },
+          observation: { type: 'string' },
+          correction: { type: 'string' },
+        },
+        required: ['time', 'title', 'observation', 'correction'],
+      },
+    },
+  },
+  required: ['summary', 'strengths', 'priorities', 'opponent', 'plan', 'drills', 'evidence'],
+};
+
+function interactionOutputText(raw: unknown) {
+  if (!raw || typeof raw !== 'object') return '';
+  const data = raw as Record<string, unknown>;
+  if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
+  if (!Array.isArray(data.steps)) return '';
+  const chunks: string[] = [];
+  for (const step of data.steps) {
+    if (!step || typeof step !== 'object') continue;
+    const content = (step as Record<string, unknown>).content;
+    if (!Array.isArray(content)) continue;
+    for (const item of content) {
+      if (!item || typeof item !== 'object') continue;
+      const text = (item as Record<string, unknown>).text;
+      if (typeof text === 'string') chunks.push(text);
+    }
+  }
+  return chunks.join('').trim();
+}
+
+async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string) {
+  const configured = process.env.GEMINI_MODEL;
+  const candidates = Array.from(new Set([
+    configured && configured !== 'gemini-2.5-flash' && configured !== 'gemini-3.7-flash' ? configured : '',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+  ].filter(Boolean)));
+
+  let lastStatus = 0;
+  for (const model of candidates) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+        method: 'POST',
+        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          input: [
+            { type: 'video', uri: fileUri, mime_type: mimeType },
+            { type: 'text', text: prompt },
+          ],
+          response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
+          store: false,
+        }),
+        cache: 'no-store',
+      });
+      lastStatus = response.status;
+      const body = await response.text();
+      if (response.ok) {
+        const json = JSON.parse(body) as unknown;
+        const text = interactionOutputText(json);
+        if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
+        return cleanGeminiJson(text);
+      }
+      if ((response.status === 429 || response.status === 503) && attempt < 2) {
+        await sleep(1200 * (attempt + 1));
+        continue;
+      }
+      break;
+    }
+  }
+  throw new Error(`Gemini rechazó el análisis (${lastStatus || 'sin estado'}).`);
+}
+
 async function analyzeWithGemini(source: FormData) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
@@ -150,24 +238,8 @@ async function analyzeWithGemini(source: FormData) {
   const target = String(source.get('glove_color') || source.get('athlete_marker') || 'peleador seleccionado');
   const sport = String(source.get('sport') || 'boxing');
   const stance = String(source.get('stance') || 'unknown');
-  const prompt = `Analiza este video de sparring de ${sport}. Evalúa SOLO al peleador objetivo: ${target}. Guardia declarada: ${stance}. Responde en español como coach técnico. No inventes conteos exactos de golpes ni estadísticas que el video no permita verificar. Separa observaciones visibles de hipótesis tácticas. Devuelve SOLO JSON válido con esta forma: {"summary":"...","strengths":["..."],"priorities":["..."],"opponent":["..."],"plan":["..."],"drills":["..."],"evidence":[{"time":"MM:SS","title":"...","observation":"...","correction":"..."}]}. Usa timestamps solo cuando tengas evidencia visible. Máximo 3 prioridades principales y recomendaciones accionables.`;
-  const configuredModel = process.env.GEMINI_MODEL;
-  const model = configuredModel === 'gemini-2.5-flash' ? 'gemini-3.7-flash' : (configuredModel || 'gemini-3.7-flash');
-  const generated = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }, { file_data: { mime_type: mimeType, file_uri: fileUri } }] }],
-      generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
-    }),
-    cache: 'no-store',
-  });
-  const generatedText = await generated.text();
-  if (!generated.ok) throw new Error(`Gemini rechazó el análisis (${generated.status}).`);
-  const generatedJson = JSON.parse(generatedText) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  const text = generatedJson.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('').trim();
-  if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
-  const parsed = cleanGeminiJson(text);
+  const prompt = `Analiza este video de sparring de ${sport}. Evalúa SOLO al peleador objetivo: ${target}. Guardia declarada: ${stance}. Responde en español como coach técnico. No inventes conteos exactos de golpes ni estadísticas que el video no permita verificar. Separa observaciones visibles de hipótesis tácticas. Devuelve un reporte JSON con summary, strengths, priorities, opponent, plan, drills y evidence. Cada evidence debe incluir time en MM:SS, title, observation y correction. Usa timestamps solo cuando tengas evidencia visible. Máximo 3 prioridades principales y recomendaciones accionables.`;
+  const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
 
   const stringList = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string') as string[] : [];
   const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.filter(x => x && typeof x === 'object').map(x => {
