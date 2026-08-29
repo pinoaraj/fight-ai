@@ -17,6 +17,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: web-aws-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DEPLOY_REGION: sa-east-1
   ECR_REGION: us-east-2
@@ -185,7 +189,7 @@ jobs:
           PY
           test -s /tmp/fight-ai-red-gloves-smoke.mp4
 
-          RESULT=$(curl --fail --max-time 240 -sS \
+          HTTP_CODE=$(curl --max-time 240 -sS -o /tmp/fight-ai-smoke-result.json -w '%{http_code}' \
             -F 'video=@/tmp/fight-ai-red-gloves-smoke.mp4;type=video/mp4' \
             -F 'language=es' \
             -F 'sport=boxing' \
@@ -193,7 +197,18 @@ jobs:
             -F 'glove_color=red' \
             -F 'stance=orthodox' \
             "$URL/api/analyze")
-          echo "$RESULT" > /tmp/fight-ai-smoke-result.json
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Gemini deployed smoke failed with HTTP $HTTP_CODE" >&2
+            python - <<'PY'
+          import json
+          try:
+              data=json.load(open('/tmp/fight-ai-smoke-result.json',encoding='utf-8'))
+              print('Safe analysis error:', data.get('error','unknown server error'))
+          except Exception:
+              print('Safe analysis error: non-JSON response')
+          PY
+            exit 1
+          fi
           python - <<'PY'
           import json
           data=json.load(open('/tmp/fight-ai-smoke-result.json',encoding='utf-8'))
