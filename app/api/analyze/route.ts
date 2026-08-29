@@ -151,7 +151,8 @@ async function analyzeWithGemini(source: FormData) {
   const sport = String(source.get('sport') || 'boxing');
   const stance = String(source.get('stance') || 'unknown');
   const prompt = `Analiza este video de sparring de ${sport}. Evalúa SOLO al peleador objetivo: ${target}. Guardia declarada: ${stance}. Responde en español como coach técnico. No inventes conteos exactos de golpes ni estadísticas que el video no permita verificar. Separa observaciones visibles de hipótesis tácticas. Devuelve SOLO JSON válido con esta forma: {"summary":"...","strengths":["..."],"priorities":["..."],"opponent":["..."],"plan":["..."],"drills":["..."],"evidence":[{"time":"MM:SS","title":"...","observation":"...","correction":"..."}]}. Usa timestamps solo cuando tengas evidencia visible. Máximo 3 prioridades principales y recomendaciones accionables.`;
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const configuredModel = process.env.GEMINI_MODEL;
+  const model = configuredModel === 'gemini-2.5-flash' ? 'gemini-3.7-flash' : (configuredModel || 'gemini-3.7-flash');
   const generated = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
