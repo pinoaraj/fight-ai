@@ -263,8 +263,11 @@ export default function Home() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...session.context, fileName: session.fileName, fileUri: session.fileUri, mimeType: session.mimeType }),
     });
-    const startData = await parseResponse(started) as { id?: string };
-    if (!startData.id) throw new Error('No se pudo iniciar el trabajo de análisis.');
+    const startRaw = await started.text();
+    let startData: { id?: string; error?: string } | null = null;
+    try { startData = startRaw ? JSON.parse(startRaw) : null; } catch { startData = null; }
+    if (!started.ok) throw new Error(startData?.error || `No se pudo iniciar el análisis (HTTP ${started.status}).`);
+    if (!startData?.id) throw new Error('No se pudo iniciar el trabajo de análisis.');
     for (;;) {
       await new Promise((resolve) => window.setTimeout(resolve, 2500));
       const statusResponse = await fetch(`/api/analyze-uploaded?id=${encodeURIComponent(startData.id)}`, { cache: 'no-store' });
