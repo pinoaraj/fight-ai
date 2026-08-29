@@ -1,16 +1,20 @@
 name: Web Streaming Production Smoke
 
 on:
-  workflow_run:
-    workflows: ["Web AWS Deploy"]
-    types: [completed]
+  workflow_dispatch:
+  push:
+    branches: [web/mvp]
+    paths:
+      - '.github/workflows/web-streaming-smoke.yml'
+      - 'app/api/upload/**'
+      - 'app/api/analyze-uploaded/**'
+      - 'app/page.tsx'
 
 permissions:
   contents: read
 
 jobs:
   streaming-smoke:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'web/mvp' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
