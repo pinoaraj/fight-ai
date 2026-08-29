@@ -21,6 +21,7 @@ type UploadedAnalysisSession = {
   context: AnalysisContext;
   timings: PipelineTimings;
 };
+type ServiceHealth = { geminiConfigured?: boolean; analysisReady?: boolean };
 
 const focusOptions = [
   ['technique','Mejorar boxeo'], ['weaknesses','Detectar debilidades'], ['strategy','Analizar estrategia'],
@@ -109,6 +110,7 @@ export default function Home() {
   const [uploadedSession, setUploadedSession] = useState<UploadedAnalysisSession | null>(null);
   const [frames, setFrames] = useState<Record<string,string>>({});
   const [replayStatus, setReplayStatus] = useState('');
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealth | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const reportRef = useRef<HTMLElement>(null);
@@ -119,6 +121,7 @@ export default function Home() {
   const workflowStep = report || busy ? 5 : !video ? 1 : !anchor ? 2 : !identityReady ? 3 : 4;
 
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
+  useEffect(() => { void fetch('/api/health', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(setServiceHealth).catch(() => setServiceHealth({})); }, []);
   useEffect(() => {
     if (!busy) { setElapsed(0); return; }
     const started = Date.now();
@@ -298,7 +301,7 @@ export default function Home() {
   }
 
   return <main>
-    <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className="status"><span className="dot"/> ANÁLISIS CON EVIDENCIA</div></header>
+    <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO GEMINI…' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
     <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>Tu video se usa sólo para este análisis.</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
     <section className="workflowStrip" aria-label="Progreso del análisis">{['Video','Marcar peleador','Características','Foco del coach','Reporte'].map((label,index)=><span key={label} className={workflowStep===index+1?'active':workflowStep>index+1?'done':''}><i>{workflowStep>index+1?'✓':index+1}</i>{label}</span>)}</section>
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
@@ -319,7 +322,7 @@ export default function Home() {
       {busy && <div className="processingCard" data-testid="processing-state"><div className="spinner"/><div><b>{processingSteps[processingStep]}</b><span>{elapsed<60?`${elapsed}s transcurridos`:`${Math.floor(elapsed/60)}m ${elapsed%60}s transcurridos`} · el archivo se carga una sola vez y luego Gemini analiza la referencia preparada.</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
       {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span>{uploadedSession && !busy && <button data-testid="retry-uploaded-analysis" onClick={retryUploadedAnalysis}>REINTENTAR ANÁLISIS SIN VOLVER A SUBIR</button>}</div>}
     </aside>
-    <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>REPORTE DE COACHING</span><div className="emptyRing">◎</div><h2>Un plan claro para tu próxima sesión</h2><p>Sube el round, identifica a tu atleta y recibe tres prioridades con evidencia que puedes volver a reproducir.</p><div className="emptyTags"><span>01 · MOMENTOS VISIBLES</span><span>02 · CORRECCIONES CONCRETAS</span><span>03 · DRILLS Y PLAN VS RIVAL</span></div><button data-testid="demo-report-button" className="emptyDemo" onClick={showDemo}>EXPLORAR REPORTE DEMO →</button></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc}/>}</section></section>
+    <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>REPORTE DE COACHING</span><div className="emptyRing">◎</div><h2>Un plan claro para tu próxima sesión</h2><p>Sube el round, identifica a tu atleta y recibe tres prioridades con evidencia que puedes volver a reproducir.</p><div className="emptyTags"><span>01 · MOMENTOS VISIBLES</span><span>02 · CORRECCIONES CONCRETAS</span><span>03 · DRILLS Y PLAN VS RIVAL</span></div><div className="pdfPreview">↓ TU REPORTE INCLUIRÁ DESCARGA PDF</div><button data-testid="demo-report-button" className="emptyDemo" onClick={showDemo}>EXPLORAR REPORTE DEMO →</button></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc}/>}</section></section>
     <footer>Fight AI · Herramienta de apoyo técnico. La decisión final pertenece al atleta y su entrenador.</footer>
   </main>;
 }
@@ -346,7 +349,7 @@ function ReportView({report,onJumpMain,frames,mediaSrc}:{report:Report;onJumpMai
     if (report.mode === 'real') onJumpMain(e.time);
   }
   return <div data-testid="report-content">
-    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small>{report.timings && <small data-testid="pipeline-timings">Carga {formatMs(report.timings.upload_ms)} · Preparación Gemini {formatMs(report.timings.gemini_processing_ms)} · Coaching {formatMs(report.timings.analysis_ms)} · Total servidor {formatMs(report.timings.total_ms)}</small>}</div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>EXPORTAR REPORTE A PDF + IMÁGENES</button></div></div>
+    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small>{report.timings && <small data-testid="pipeline-timings">Carga {formatMs(report.timings.upload_ms)} · Preparación Gemini {formatMs(report.timings.gemini_processing_ms)} · Coaching {formatMs(report.timings.analysis_ms)} · Total servidor {formatMs(report.timings.total_ms)}</small>}</div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>↓ DESCARGAR PDF</button></div></div>
     {report.mode === 'demo' && <section className="demoVideoSection" data-testid="demo-video-section"><div><span className="eyebrow">VIDEO DE DEMOSTRACIÓN</span><h3>Prueba cómo funciona la evidencia antes de subir tu sparring</h3><p>Este clip corto demuestra selección, timestamps y reproducción. El reporte de ejemplo no afirma que sea un análisis real de este clip.</p></div><video data-testid="demo-video" src="/api/demo-video" controls muted playsInline preload="auto"/></section>}
     <div className="takeaway"><span>DIAGNÓSTICO PRINCIPAL</span><p>{report.summary}</p></div>
     <div className="reportNav"><a href="#priorities">Prioridades</a><a href="#opponent">Rival</a><a href="#visual-coach">Visual Coach</a><a href="#evidence">Evidencia</a></div>
