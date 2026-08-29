@@ -6,9 +6,11 @@ Web client for the Fight AI combat-sparring analysis platform.
 
 Working branch: `web/mvp`
 
-End-of-day status: `docs/STATUS_2026-08-28.md`
+Project continuity guide for any coding agent: `docs/PROJECT_CONTINUITY.md`
 
 Living product/architecture spec: `docs/GRAPIFY_BETA_SPEC.md`
+
+Operational handoff: `docs/CODEX_HANDOFF_2026-08-29.md`
 
 ## Current web baseline
 
@@ -21,7 +23,7 @@ Living product/architecture spec: `docs/GRAPIFY_BETA_SPEC.md`
 - explicit provider attribution with `usedInReport`
 - shared-backend adapter
 - server-side Gemini fallback
-- HEVC-compatible frame selection and server-rendered evidence JPEGs for PDF
+- HEVC-compatible frame selection and server-rendered evidence JPEGs for every report timestamp and PDF
 - visible analysis ETA, elapsed time and phase-by-phase progress
 - HTTPS public entry point provisioned through CloudFront for Android/iOS
 - CI + Docker build
