@@ -148,9 +148,9 @@ export default function Home() {
     (async () => {
       const next: Record<string,string> = {};
       if (!fallbackFrameUrl) {
-        for (const e of report.evidence.slice(0, 4)) next[e.time] = await captureFrame(reportVideoSrc, seconds(e.time));
+        for (const e of report.evidence) next[e.time] = await captureFrame(reportVideoSrc, seconds(e.time));
       }
-      const missing = report.evidence.slice(0, 4).filter((e) => !next[e.time]);
+      const missing = report.evidence.filter((e) => !next[e.time]);
       // HEVC Main 10 and some phone codecs cannot be painted by Chrome. Ask
       // FFmpeg for the exact report timestamps so printed PDF evidence stays real.
       if (missing.length && video && report.mode === 'real') {
@@ -378,6 +378,7 @@ function SectionTitle({n,title,subtitle,extraClass=''}:{n:string;title:string;su
 
 function ReportView({report,onJumpMain,frames,mediaSrc,sourceNeedsFrames}:{report:Report;onJumpMain:(time:string)=>void;frames:Record<string,string>;mediaSrc:string;sourceNeedsFrames:boolean}) {
   const footworkIssue = report.priorities.some(x=>/foot|pie|pies|base|piv|ángulo|distancia|entrada|salida/i.test(x));
+  const evidenceFramesReady = report.evidence.every((e) => Boolean(frames[e.time]));
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(report.evidence[0] || null);
   const evidenceVideoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => { setSelectedEvidence(report.evidence[0] || null); }, [report]);
@@ -397,7 +398,7 @@ function ReportView({report,onJumpMain,frames,mediaSrc,sourceNeedsFrames}:{repor
     if (report.mode === 'real') onJumpMain(e.time);
   }
   return <div data-testid="report-content">
-    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small>{report.timings && <small data-testid="pipeline-timings">Carga {formatMs(report.timings.upload_ms)} · Preparación Gemini {formatMs(report.timings.gemini_processing_ms)} · Coaching {formatMs(report.timings.analysis_ms)} · Total servidor {formatMs(report.timings.total_ms)}</small>}</div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>↓ DESCARGAR PDF</button></div></div>
+    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small>{report.timings && <small data-testid="pipeline-timings">Carga {formatMs(report.timings.upload_ms)} · Preparación Gemini {formatMs(report.timings.gemini_processing_ms)} · Coaching {formatMs(report.timings.analysis_ms)} · Total servidor {formatMs(report.timings.total_ms)}</small>}</div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div>{!evidenceFramesReady && <small className="pdfFrameStatus" role="status">PREPARANDO IMÁGENES PARA PDF · {Object.keys(frames).length}/{report.evidence.length}</small>}<button data-testid="print-report" disabled={!evidenceFramesReady} title={evidenceFramesReady ? 'Descargar reporte con imágenes reales' : 'Esperando las capturas reales del video'} onClick={()=>window.print()}>{evidenceFramesReady?'↓ DESCARGAR PDF':'⌛ PREPARANDO PDF'}</button></div></div>
     {report.mode === 'demo' && <section className="demoVideoSection" data-testid="demo-video-section"><div><span className="eyebrow">VIDEO DE DEMOSTRACIÓN</span><h3>Prueba cómo funciona la evidencia antes de subir tu sparring</h3><p>Este clip corto demuestra selección, timestamps y reproducción. El reporte de ejemplo no afirma que sea un análisis real de este clip.</p></div><video data-testid="demo-video" src="/api/demo-video" controls muted playsInline preload="auto"/></section>}
     <div className="takeaway"><span>DIAGNÓSTICO PRINCIPAL</span><p>{report.summary}</p></div>
     <div className="reportNav"><a href="#priorities">Prioridades</a><a href="#opponent">Rival</a><a href="#visual-coach">Visual Coach</a><a href="#evidence">Evidencia</a></div>

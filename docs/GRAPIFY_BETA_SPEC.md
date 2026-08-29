@@ -134,7 +134,7 @@ This is still not the final durable asynchronous architecture. A future producti
 ## 8. Evidence and PDF
 Timestamp evidence must be reproducible against the same uploaded local video. Clicking evidence seeks the preview to the parsed `MM:SS` time and attempts playback after the seek completes.
 
-The web client captures up to four evidence frames locally from the uploaded video using a hidden video/canvas pipeline. If Chrome cannot paint the codec, it sends the source once to `/api/evidence-frames`, which stages it ephemerally and uses FFmpeg to generate JPEGs at the report timestamps. Those real frames are displayed beside timestamp findings and are included by the print stylesheet when exporting/saving the report as PDF.
+The web client captures every report evidence frame locally from the uploaded video using a hidden video/canvas pipeline. If Chrome cannot paint the codec, it sends the source once to `/api/evidence-frames`, which stages it ephemerally and uses FFmpeg to generate JPEGs at the report timestamps. Those real frames are displayed beside timestamp findings and are included by the print stylesheet when exporting/saving the report as PDF. PDF export stays disabled with a visible capture counter until every report timestamp has its real image, preventing black evidence placeholders in a downloaded report.
 
 If a timestamp has no verifiable frame or the browser cannot decode it, the product should show a placeholder rather than fabricate an image.
 

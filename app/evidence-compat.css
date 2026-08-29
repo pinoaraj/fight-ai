@@ -25,6 +25,13 @@
 
 .evidenceCompatibilityNote { color: #d6a93b; }
 
+.pdfFrameStatus {
+  color: #d6a93b;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+
 @media print {
   .evidencePlayer img { display: block !important; }
 }
