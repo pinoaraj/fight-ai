@@ -49,6 +49,8 @@ Target selection must be explicit and Android-like. The preferred web flow is:
 
 Marking mode must never darken or cover the video image. The click layer is transparent so the athlete sees the exact fighter being selected. The mark records both frame-relative coordinates and the video time used for the anchor.
 
+The web must not enable marking merely from video metadata. It first confirms a decoded non-zero frame; if automatic decoding stalls, it exposes a user-triggered **Cargar frame** retry and a truthful codec/decode error instead of asking the athlete to mark a black surface.
+
 Web multipart identity fields now include:
 - `athlete_marker`
 - `glove_color`
