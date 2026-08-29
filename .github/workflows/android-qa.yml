@@ -195,7 +195,7 @@ jobs:
         run: |
           set -euo pipefail
           test $(find assets/techniques -name '*.mp4' | wc -l) -eq 6
-          for asset in jab-cross-pivot slip-counter lateral-exit guard-recovery distance-entry body-head-angle; do
+          for asset in jab-cross-pivot slip-counter lateral-exit guard-recovery kick-check jab-feint-body; do
             test -s "assets/techniques/${asset}.mp4"
           done
           echo "[PASS] release bundle reuses all 6 motion demos validated on Linux"
