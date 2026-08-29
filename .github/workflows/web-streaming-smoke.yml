@@ -1,0 +1,103 @@
+name: Web Streaming Production Smoke
+
+on:
+  workflow_run:
+    workflows: ["Web AWS Deploy"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  streaming-smoke:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'web/mvp' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: web/mvp
+
+      - name: Verify public streaming upload and pre-uploaded Gemini analysis
+        run: |
+          set -euo pipefail
+          URL="http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com"
+          curl --fail --max-time 15 -sS "$URL/api/health" | tee /tmp/health.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/health.json',encoding='utf-8'))
+          assert data.get('analysisReady') is True, data
+          assert data.get('geminiConfigured') is True, data
+          PY
+
+          python - <<'PY'
+          import base64, pathlib
+          src=pathlib.Path('qa/gemini-proof-red-gloves-tiny.b64')
+          raw=''.join(src.read_text(encoding='utf-8').split())
+          pathlib.Path('/tmp/fight-ai-streaming-smoke.mp4').write_bytes(base64.b64decode(raw, validate=False))
+          PY
+          SIZE=$(stat -c%s /tmp/fight-ai-streaming-smoke.mp4)
+
+          UPLOAD_CODE=$(curl --max-time 600 -sS -o /tmp/upload.json -w '%{http_code}' \
+            -X POST \
+            -H 'Content-Type: video/mp4' \
+            -H 'x-fight-ai-name: fight-ai-streaming-smoke.mp4' \
+            -H "x-fight-ai-size: $SIZE" \
+            --data-binary @/tmp/fight-ai-streaming-smoke.mp4 \
+            "$URL/api/upload")
+          if [ "$UPLOAD_CODE" != "200" ]; then
+            echo "Streaming upload smoke failed with HTTP $UPLOAD_CODE" >&2
+            python - <<'PY'
+          import json
+          try:
+              print('Safe upload error:', json.load(open('/tmp/upload.json',encoding='utf-8')).get('error','unknown'))
+          except Exception:
+              print('Safe upload error: non-JSON response')
+          PY
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          uploaded=json.load(open('/tmp/upload.json',encoding='utf-8'))
+          assert uploaded.get('fileName') and uploaded.get('fileUri'), uploaded
+          req={
+            'fileName':uploaded['fileName'], 'fileUri':uploaded['fileUri'], 'mimeType':uploaded.get('mimeType','video/mp4'),
+            'language':'es', 'sport':'boxing', 'stance':'orthodox',
+            'glove_color':'red', 'top_color':'black', 'relative_height':'shorter', 'build':'medium',
+            'fighter_notes':'guantes rojos, polera negra, peleador objetivo',
+            'anchor_x':'45.0', 'anchor_y':'55.0', 'anchor_size':'24.0', 'anchor_time':'1.0',
+            'analysis_focus':'technique,weaknesses,strategy,footwork',
+            'custom_focus':'mejorar entradas, salidas y lectura táctica del rival'
+          }
+          json.dump(req,open('/tmp/analyze-uploaded.json','w',encoding='utf-8'),ensure_ascii=False)
+          PY
+
+          ANALYZE_CODE=$(curl --max-time 600 -sS -o /tmp/result.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/analyze-uploaded.json \
+            "$URL/api/analyze-uploaded")
+          if [ "$ANALYZE_CODE" != "200" ]; then
+            echo "Uploaded-reference analysis smoke failed with HTTP $ANALYZE_CODE" >&2
+            python - <<'PY'
+          import json
+          try:
+              print('Safe analysis error:', json.load(open('/tmp/result.json',encoding='utf-8')).get('error','unknown'))
+          except Exception:
+              print('Safe analysis error: non-JSON response')
+          PY
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/result.json',encoding='utf-8'))
+          assert data.get('mode') == 'real', data
+          assert data.get('provider') == 'Gemini', data
+          assert data.get('usedInReport') is True, data
+          assert isinstance(data.get('summary'),str) and data['summary'].strip(), data
+          assert isinstance(data.get('priorities'),list) and data['priorities'], data
+          evidence=data.get('evidence')
+          assert isinstance(evidence,list) and evidence, data
+          print(f"Browser-equivalent streaming Gemini smoke: VERIFIED ({len(evidence)} evidence items)")
+          PY
