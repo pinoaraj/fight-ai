@@ -1,0 +1,234 @@
+name: Android Cloud QA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [qa/cloud-android]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: android-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Product contract QA
+        run: node qa/contracts.mjs
+      - name: Reconstruct Fight AI 0.14 source
+        run: |
+          set -euo pipefail
+          mkdir -p qa/full-source
+          cat bootstrap/app014/part-*.b64 > /tmp/fightai.b64
+          base64 -d /tmp/fightai.b64 > /tmp/fightai.tar.gz
+          echo "b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2  /tmp/fightai.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/fightai.tar.gz -C qa/full-source
+          test -f qa/full-source/App.tsx
+          test -f qa/full-source/src/reportPdf.ts
+          test -f qa/full-source/src/aiStatus.ts
+          test -f qa/full-source/tools_make_visuals.py
+      - name: Static source checks
+        working-directory: qa/full-source
+        run: |
+          npm install --legacy-peer-deps
+          npx tsc --noEmit
+      - name: Gemini secret configuration gate
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "GEMINI_API_KEY is not configured"
+            exit 1
+          fi
+          echo "[PASS] GEMINI_API_KEY is configured (value intentionally hidden)"
+      - name: 0.14 feature contract checks
+        working-directory: qa/full-source
+        run: |
+          grep -q "expo-print" package.json
+          grep -q "expo-sharing" package.json
+          grep -q "printToFileAsync" src/reportPdf.ts
+          grep -q "usedInReport" src/reportPdf.ts
+          grep -q "IA CONECTADA" src/aiStatus.ts
+          grep -q "DESCARGAR / COMPARTIR PDF" App.tsx
+          grep -q "DEMO EN MOVIMIENTO" App.tsx
+      - name: Generate and validate motion demos
+        working-directory: qa/full-source
+        run: |
+          pip install "numpy>=2,<3" opencv-python-headless
+          python tools_make_visuals.py
+          test $(find assets/techniques -name '*.mp4' | wc -l) -eq 6
+          python - <<'PY'
+          import cv2,glob,sys
+          bad=[]
+          for p in glob.glob('assets/techniques/*.mp4'):
+              c=cv2.VideoCapture(p); n=int(c.get(cv2.CAP_PROP_FRAME_COUNT)); fps=c.get(cv2.CAP_PROP_FPS); frames=[]
+              for idx in (0,max(0,n//2),max(0,n-2)):
+                  c.set(cv2.CAP_PROP_POS_FRAMES,idx); ok,f=c.read()
+                  if ok: frames.append(f)
+              c.release()
+              moving=len(frames)>=2 and any(abs(frames[i].astype('int16')-frames[i-1].astype('int16')).mean()>0.25 for i in range(1,len(frames)))
+              if n < 60 or fps < 20 or not moving: bad.append((p,n,fps,moving))
+          if bad: print('BAD MOTION DEMOS',bad); sys.exit(1)
+          print('[PASS] 6 motion demos contain real frame-to-frame movement')
+          PY
+      - name: Upload validated motion demos
+        uses: actions/upload-artifact@v4
+        with:
+          name: fight-ai-validated-motion-demos
+          path: qa/full-source/assets/techniques/*.mp4
+          if-no-files-found: error
+      - name: Upload source QA report inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fight-ai-source-qa
+          path: |
+            qa/full-source/QA_REPORT_0_14_0.md
+            qa/full-source/BETA_0_14_0.md
+
+  gemini-video-proof:
+    needs: source-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-2.5-flash
+      FIGHT_AI_VIDEO: qa-artifacts/gemini-proof-red-gloves.mp4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Reconstruct real red-gloves proof clip
+        run: |
+          set -euo pipefail
+          mkdir -p qa-artifacts
+          python - <<'PY'
+          import base64,re
+          src=open('qa/gemini-proof-red-gloves-tiny.b64','r',encoding='utf-8',errors='ignore').read()
+          clean=''.join(re.findall(r'[A-Za-z0-9+/=]',src)).rstrip('=')
+          if len(clean) % 4 == 1:
+              clean=clean[:-1]
+          clean += '='*((-len(clean))%4)
+          raw=base64.b64decode(clean,validate=False)
+          assert b'ftyp' in raw[:32], 'decoded payload is not MP4'
+          assert len(raw) > 4096, 'decoded proof clip is unexpectedly small'
+          open('qa-artifacts/gemini-proof-red-gloves.mp4','wb').write(raw)
+          print('[PASS] reconstructed MP4 bytes',len(raw))
+          PY
+          test -s "$FIGHT_AI_VIDEO"
+          echo "[PASS] real sparring proof clip reconstructed"
+      - name: Run authenticated Gemini video analysis
+        run: python qa/gemini_video_probe.py
+      - name: Validate Gemini attribution and evidence
+        run: |
+          python - <<'PY'
+          import json
+          p='qa-artifacts/gemini-red-gloves-analysis.json'
+          d=json.load(open(p,encoding='utf-8'))
+          assert d['provider']=='Gemini'
+          assert d['usedInReport'] is True
+          assert d['target']=='red gloves'
+          a=d['analysis']
+          assert a.get('evidence'), 'Gemini returned no timestamped evidence'
+          print('[PASS] Gemini returned accepted red-gloves evidence; usedInReport=true')
+          PY
+      - name: Upload Gemini proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fight-ai-gemini-red-gloves-proof
+          path: qa-artifacts/gemini-red-gloves-analysis.json
+
+  real-app-build:
+    needs: source-validation
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Reconstruct Fight AI source
+        run: |
+          set -euo pipefail
+          mkdir -p qa/full-source
+          cat bootstrap/app014/part-*.b64 > /tmp/fightai.b64
+          python3 - <<'PY'
+          import base64,hashlib
+          encoded=open('/tmp/fightai.b64','rb').read()
+          raw=base64.b64decode(encoded)
+          digest=hashlib.sha256(raw).hexdigest()
+          expected='b1b0c7210d26dd047d9015266781dcc10ef463a594502b2f9f4aaeea383240e2'
+          assert digest == expected, f'source archive checksum mismatch: {digest}'
+          open('/tmp/fightai.tar.gz','wb').write(raw)
+          print('[PASS] source archive checksum', digest)
+          PY
+          tar -xzf /tmp/fightai.tar.gz -C qa/full-source
+      - name: Download validated visual demo assets
+        uses: actions/download-artifact@v4
+        with:
+          name: fight-ai-validated-motion-demos
+          path: qa/full-source/assets/techniques
+      - name: Validate release visual demo assets
+        working-directory: qa/full-source
+        run: |
+          set -euo pipefail
+          test $(find assets/techniques -name '*.mp4' | wc -l) -eq 6
+          for asset in jab-cross-pivot slip-counter lateral-exit guard-recovery kick-check jab-feint-body; do
+            test -s "assets/techniques/${asset}.mp4"
+          done
+          echo "[PASS] release bundle reuses all 6 motion demos validated on Linux"
+      - name: Build self-contained Expo Android APK
+        working-directory: qa/full-source
+        env:
+          NODE_ENV: production
+          EXPO_PUBLIC_VISION_API_URL: http://10.0.2.2:8787
+        run: |
+          npm install --legacy-peer-deps
+          npx expo prebuild --platform android --no-install
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+      - name: Run real Fight AI app on accelerated Android 35
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          script: |
+            set -eu
+            mkdir -p qa-artifacts
+            test -f qa/full-source/android/app/build/outputs/apk/release/app-release.apk
+            adb install -r qa/full-source/android/app/build/outputs/apk/release/app-release.apk
+            chmod +x qa/android_virtual_agent.sh
+            qa/android_virtual_agent.sh qa-artifacts
+      - name: Upload real Android QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fight-ai-real-android-qa
+          path: |
+            qa-artifacts/
+            qa/full-source/android/app/build/outputs/apk/release/app-release.apk
