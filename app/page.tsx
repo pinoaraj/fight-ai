@@ -23,8 +23,8 @@ const demo: Report = {
   plan: ['Finta → paso corto → jab al pecho para ocupar línea.', 'Ataca máximo 2–3 golpes cuando la base no está asentada y termina con pivote.', 'Corta la salida lateral en vez de perseguir recto.'],
   drills: ['Step-jab + salida 45° · 3×2 min — objetivo: que pies y manos lleguen juntos.', 'Jab al pecho → cuerpo → pivote · 3×2 min — objetivo: crear reacción y salir fuera de línea.', 'Defensa tras combinación · 3×2 min — toda combinación termina con guardia + ángulo.'],
   evidence: [
-    { time: '00:34', title: 'Entrada desde distancia larga', observation: 'La cabeza y el torso cruzan la línea antes de que la base termine de cerrar distancia.', correction: 'Acorta con los pies primero; golpea cuando el pie trasero ya acompaña la entrada.' },
-    { time: '00:52', title: 'Recuperación lenta después de atacar', observation: 'La combinación termina frente al rival sin un cambio inmediato de ángulo.', correction: 'Programa la salida como parte de la combinación: último golpe → pivote o paso lateral.' },
+    { time: '00:01', title: 'Entrada y base', observation: 'Momento de demostración para aprender a revisar la relación entre torso, base y distancia de entrada.', correction: 'Compara el avance de los pies con la posición del torso y evita proyectarte antes de cerrar distancia.' },
+    { time: '00:03', title: 'Salida y recuperación', observation: 'Momento de demostración para revisar si el peleador queda frente a la línea de ataque después de su acción.', correction: 'Recupera guardia y añade un paso lateral o pivote como parte del final de la combinación.' },
   ],
 };
 
@@ -45,11 +45,11 @@ async function captureFrame(src: string, at: number) {
         canvas.width = Math.min(v.videoWidth || 960, 960);
         canvas.height = Math.round(canvas.width * ((v.videoHeight || 540) / (v.videoWidth || 960)));
         canvas.getContext('2d')?.drawImage(v, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', .78));
+        resolve(canvas.toDataURL('image/jpeg', .82));
       } catch { resolve(''); }
       v.removeAttribute('src'); v.load();
     };
-    v.addEventListener('loadedmetadata', () => { v.currentTime = Math.min(Math.max(0, at), Math.max(0, v.duration - .1)); }, { once: true });
+    v.addEventListener('loadedmetadata', () => { v.currentTime = Math.min(Math.max(0.08, at), Math.max(0.08, v.duration - .08)); }, { once: true });
     v.addEventListener('seeked', finish, { once: true });
     v.addEventListener('error', () => resolve(''), { once: true });
   });
@@ -82,6 +82,7 @@ export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const reportRef = useRef<HTMLElement>(null);
   const videoUrl = useMemo(() => (video ? URL.createObjectURL(video) : ''), [video]);
+  const reportVideoSrc = report?.mode === 'demo' ? '/api/demo-video' : videoUrl;
   const processingStep = Math.min(processingSteps.length - 1, Math.max(stageFloor, Math.floor(elapsed / 32)));
 
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
@@ -92,19 +93,20 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [busy]);
   useEffect(() => {
-    if (!report || !videoUrl || !report.evidence.length) return;
+    if (!report || !reportVideoSrc || !report.evidence.length) return;
     let cancelled = false;
     (async () => {
       const next: Record<string,string> = {};
-      for (const e of report.evidence.slice(0, 4)) next[e.time] = await captureFrame(videoUrl, seconds(e.time));
+      for (const e of report.evidence.slice(0, 4)) next[e.time] = await captureFrame(reportVideoSrc, seconds(e.time));
       if (!cancelled) setFrames(next);
     })();
     return () => { cancelled = true; };
-  }, [report, videoUrl]);
+  }, [report, reportVideoSrc]);
 
   function selectVideo(file: File | null) {
     setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewTime(0); setError(''); setReplayStatus('');
   }
+  function showDemo() { setFrames({}); setReport(demo); window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
   function toggleFocus(id: string) { setFocuses(x => x.includes(id) ? x.filter(v => v !== id) : [...x, id]); }
   function primePreview(node: HTMLVideoElement) {
     node.pause();
@@ -195,13 +197,14 @@ export default function Home() {
     finally { setBusy(false); }
   }
 
-  function jump(time: string) {
+  function jumpMainPreview(time: string) {
     const node = videoRef.current; if (!node) return;
-    const target = seconds(time); setReplayStatus(`Preparando evidencia ${time}…`);
+    const target = seconds(time); setReplayStatus(`Evidencia ${time} lista en el reproductor principal.`);
     const seek = () => {
-      node.pause(); node.currentTime = Math.min(target, Math.max(0, node.duration || target));
-      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const done = () => { setReplayStatus(`Reproduciendo evidencia desde ${time}`); node.play().catch(() => undefined); };
+      node.pause();
+      const max = Number.isFinite(node.duration) && node.duration > .2 ? node.duration - .08 : target;
+      node.currentTime = Math.min(Math.max(.08, target), max);
+      const done = () => node.play().catch(() => undefined);
       node.addEventListener('seeked', done, { once: true });
     };
     if (node.readyState < 1) node.addEventListener('loadedmetadata', seek, { once: true }); else seek();
@@ -209,7 +212,7 @@ export default function Home() {
 
   return <main>
     <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className="status"><span className="dot"/> MOTOR WEB</div></header>
-    <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, describe quién es y dile al coach virtual qué quieres mejorar. El reporte debe explicar patrones, causas, consecuencias y correcciones con evidencia.</p><div className="heroActions"><a className="cta" href="#analyze">ANALIZAR VIDEO</a><button onClick={() => setReport(demo)}>VER REPORTE DEMO</button></div></div><div className="heroCard"><span className="heroMetric">01</span><b>OJO CLÍNICO, NO CONSEJOS GENÉRICOS</b><p>Patrón visible → causa → consecuencia táctica → corrección → drill → evidencia.</p></div></section>
+    <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, describe quién es y dile al coach virtual qué quieres mejorar. El reporte debe explicar patrones, causas, consecuencias y correcciones con evidencia.</p><div className="heroActions"><a className="cta" href="#analyze">ANALIZAR VIDEO</a><button data-testid="demo-report-button" onClick={showDemo}>VER REPORTE DEMO</button></div></div><div className="heroCard"><span className="heroMetric">01</span><b>OJO CLÍNICO, NO CONSEJOS GENÉRICOS</b><p>Patrón visible → causa → consecuencia táctica → corrección → drill → evidencia.</p></div></section>
     <section className="workflowStrip"><span className="active">1 · Video</span><span>2 · Marcar peleador</span><span>3 · Características</span><span>4 · Foco del coach</span><span>5 · Reporte</span></section>
 
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
@@ -236,26 +239,66 @@ export default function Home() {
       {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span></div>}
     </aside>
 
-    <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>06</span><div className="emptyRing">◎</div><h2>Tu coaching aparecerá aquí</h2><p>El reporte mostrará si Gemini participó, prioridades, rival, estrategia, drills, videos de corrección y evidencia reproducible.</p></div>:<ReportView report={report} jump={jump} frames={frames}/>}</section></section>
+    <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>06</span><div className="emptyRing">◎</div><h2>Tu coaching aparecerá aquí</h2><p>El reporte mostrará si Gemini participó, prioridades, rival, estrategia, drills, videos de corrección y evidencia reproducible.</p></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc}/>}</section></section>
     <footer>Fight AI · Herramienta de apoyo técnico. La decisión final pertenece al atleta y su entrenador.</footer>
   </main>;
 }
 
 function SectionTitle({n,title,subtitle,extraClass=''}:{n:string;title:string;subtitle:string;extraClass?:string}) { return <div className={`sectionTitle ${extraClass}`}><span>{n}</span><div><b>{title}</b><small>{subtitle}</small></div></div>; }
 
-function ReportView({report,jump,frames}:{report:Report;jump:(time:string)=>void;frames:Record<string,string>}) {
+function ReportView({report,onJumpMain,frames,mediaSrc}:{report:Report;onJumpMain:(time:string)=>void;frames:Record<string,string>;mediaSrc:string}) {
   const footworkIssue = report.priorities.some(x=>/foot|pie|pies|base|piv|ángulo|distancia|entrada|salida/i.test(x));
+  const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(report.evidence[0] || null);
+  const evidenceVideoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => { setSelectedEvidence(report.evidence[0] || null); }, [report]);
+
+  function playEvidence(e: Evidence) {
+    setSelectedEvidence(e);
+    const node = evidenceVideoRef.current;
+    if (node && mediaSrc) {
+      const target = seconds(e.time);
+      const seek = () => {
+        node.pause();
+        const max = Number.isFinite(node.duration) && node.duration > .2 ? node.duration - .08 : target;
+        node.currentTime = Math.min(Math.max(.08, target), max);
+        const done = () => node.play().catch(() => undefined);
+        node.addEventListener('seeked', done, { once: true });
+      };
+      if (node.readyState < 1) node.addEventListener('loadedmetadata', seek, { once: true }); else seek();
+    }
+    if (report.mode === 'real') onJumpMain(e.time);
+  }
+
   return <div data-testid="report-content">
-    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo · no es análisis real':'Análisis completado'}</small></div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>EXPORTAR REPORTE A PDF + IMÁGENES</button></div></div>
+    <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small></div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div><button data-testid="print-report" onClick={()=>window.print()}>EXPORTAR REPORTE A PDF + IMÁGENES</button></div></div>
+
+    {report.mode === 'demo' && <section className="demoVideoSection" data-testid="demo-video-section"><div><span className="eyebrow">VIDEO DE DEMOSTRACIÓN</span><h3>Prueba cómo funciona la evidencia antes de subir tu sparring</h3><p>Este clip corto está incluido solo para demostrar selección, timestamps y reproducción. El reporte de ejemplo no afirma que sea un análisis real de este clip.</p></div><video data-testid="demo-video" src="/api/demo-video" controls muted playsInline preload="metadata"/></section>}
+
     <div className="takeaway"><span>DIAGNÓSTICO PRINCIPAL</span><p>{report.summary}</p></div>
     <div className="reportNav"><a href="#priorities">Prioridades</a><a href="#opponent">Rival</a><a href="#visual-coach">Visual Coach</a><a href="#evidence">Evidencia</a></div>
     <div className="grid3"><Card title="FORTALEZAS QUE DEBES CONSERVAR" items={report.strengths} tone="good"/><Card title="PRIORIDADES CLÍNICAS" items={report.priorities} tone="focus" id="priorities"/><Card title="LECTURA DEL RIVAL" items={report.opponent} tone="neutral" id="opponent"/></div>
     <div className="strategy"><div><h3>PLAN TÁCTICO</h3>{report.plan.map((x,i)=><p key={x+i}><b>0{i+1}</b><span>{x}</span></p>)}</div><div><h3>DRILLS PRESCRITOS</h3>{report.drills.map((x,i)=><p key={x+i}><b>0{i+1}</b><span>{x}</span></p>)}</div></div>
+
     <section className="visualCoach" id="visual-coach"><div><span className="eyebrow">VISUAL COACH</span><h3>Corrección ligada al problema detectado</h3><p>{report.priorities[0]||'Mantén una base recuperable antes de atacar.'}</p></div><div className="coachDiagram"><span className="fighterDot">TÚ</span><i className="lineArrow">→</i><span className="targetDot">RIVAL</span><b>ENTRA CON BASE · TERMINA EQUILIBRADO · SAL POR ÁNGULO ↗</b></div></section>
+
+    <section className="printDiagrams" data-testid="printable-diagrams"><div className="lessonHead"><span className="eyebrow">DIAGRAMAS DEL COACH · INCLUIDOS EN PDF</span><h3>Tres referencias visuales para llevar al entrenamiento</h3></div><div className="diagramGrid"><TechniqueDiagram kind="entry" title="1 · Entrada con base"/><TechniqueDiagram kind="guard" title="2 · Recupera guardia"/><TechniqueDiagram kind="pivot" title="3 · Sal por ángulo"/></div></section>
+
     <section className="lessonSection"><div className="lessonHead"><span className="eyebrow">VIDEOS DE CORRECCIÓN</span><h3>{footworkIssue?'Footwork, pivote y salidas':'Fundamentos aplicables a tu prioridad principal'}</h3></div><div className="lessonGrid"><article><iframe src="https://www.youtube.com/embed/-OK0kpv58Rk" title="Cómo mejorar footwork de boxeo" allowFullScreen/><b>Footwork: cómo corregirlo</b><span>Tony Jeffries · usa este video para comparar base, desplazamiento y pies demasiado abiertos.</span></article><article><iframe src="https://www.youtube.com/embed/hNclexRmDsY" title="Cómo pivotar en boxeo" allowFullScreen/><b>Pivote y salida por ángulo</b><span>Tony Jeffries · referencia visual para no quedar frente al rival después de atacar.</span></article></div></section>
+
     <h3 className="evidenceTitle" id="evidence">EVIDENCIA REPRODUCIBLE <span>{report.evidence.length} momentos</span></h3>
-    <div className="evidence">{report.evidence.length?report.evidence.map((e,i)=><button data-testid="evidence-item" key={`${i}-${e.time}`} onClick={()=>jump(e.time)}>{frames[e.time]?<img src={frames[e.time]} alt={`Captura del sparring en ${e.time}`}/>:<div className="framePlaceholder">CAPTURA<br/>CARGANDO</div>}<time>{e.time}</time><div><b>{e.title}</b><span>{e.observation}</span><small><strong>CORRECCIÓN</strong>{e.correction}</small></div><em>▶</em></button>):<div className="noEvidence">Este reporte no devolvió timestamps verificables. Fight AI no inventa evidencia.</div>}</div>
+    {mediaSrc && selectedEvidence && <section className="evidenceViewer" data-testid="evidence-viewer"><div className="evidencePlayer"><video key={mediaSrc} data-testid="evidence-video" ref={evidenceVideoRef} src={mediaSrc} controls muted playsInline preload="auto" poster={frames[selectedEvidence.time] || undefined}/></div><div><span className="eyebrow">MOMENTO SELECCIONADO · {selectedEvidence.time}</span><h3>{selectedEvidence.title}</h3><p>{selectedEvidence.observation}</p><small><strong>CORRECCIÓN</strong>{selectedEvidence.correction}</small><button data-testid="replay-selected" onClick={()=>playEvidence(selectedEvidence)}>▶ REPRODUCIR DESDE {selectedEvidence.time}</button></div></section>}
+    <div className="evidence">{report.evidence.length?report.evidence.map((e,i)=><button data-testid="evidence-item" key={`${i}-${e.time}`} className={selectedEvidence?.time===e.time?'selected':''} onClick={()=>playEvidence(e)}>{frames[e.time]?<img src={frames[e.time]} alt={`Captura del sparring en ${e.time}`}/>:<div className="framePlaceholder">CAPTURA<br/>PREPARANDO</div>}<time>{e.time}</time><div><b>{e.title}</b><span>{e.observation}</span><small><strong>CORRECCIÓN</strong>{e.correction}</small></div><em>▶</em></button>):<div className="noEvidence">Este reporte no devolvió timestamps verificables. Fight AI no inventa evidencia.</div>}</div>
   </div>;
+}
+
+function TechniqueDiagram({kind,title}:{kind:'entry'|'guard'|'pivot';title:string}) {
+  return <article className="techniqueDiagram"><b>{title}</b><svg viewBox="0 0 240 150" role="img" aria-label={title}>
+    <rect x="1" y="1" width="238" height="148" rx="8" fill="none" stroke="currentColor" opacity=".2"/>
+    {kind==='entry' && <><circle cx="62" cy="69" r="15" fill="none" stroke="currentColor" strokeWidth="3"/><line x1="62" y1="84" x2="62" y2="112" stroke="currentColor" strokeWidth="3"/><line x1="45" y1="112" x2="77" y2="112" stroke="currentColor" strokeWidth="4"/><circle cx="184" cy="69" r="15" fill="none" stroke="currentColor" strokeWidth="3"/><line x1="184" y1="84" x2="184" y2="112" stroke="currentColor" strokeWidth="3"/><path d="M82 100 C108 97 128 97 151 96" fill="none" stroke="currentColor" strokeWidth="4"/><path d="M142 87 L156 96 L142 105" fill="none" stroke="currentColor" strokeWidth="4"/><text x="76" y="132" fontSize="11" fill="currentColor">pies primero → golpe</text></>}
+    {kind==='guard' && <><circle cx="120" cy="50" r="17" fill="none" stroke="currentColor" strokeWidth="3"/><line x1="120" y1="67" x2="120" y2="112" stroke="currentColor" strokeWidth="3"/><path d="M118 76 L93 56 M122 76 L147 56" stroke="currentColor" strokeWidth="5"/><circle cx="90" cy="53" r="6" fill="none" stroke="currentColor" strokeWidth="3"/><circle cx="150" cy="53" r="6" fill="none" stroke="currentColor" strokeWidth="3"/><path d="M79 45 C86 31 97 25 109 24 M161 45 C154 31 143 25 131 24" fill="none" stroke="currentColor" strokeWidth="3"/><text x="73" y="132" fontSize="11" fill="currentColor">manos vuelven a casa</text></>}
+    {kind==='pivot' && <><circle cx="104" cy="73" r="17" fill="none" stroke="currentColor" strokeWidth="3"/><circle cx="177" cy="73" r="17" fill="none" stroke="currentColor" strokeWidth="3"/><path d="M104 108 C75 108 55 91 55 68 C55 43 78 27 103 29" fill="none" stroke="currentColor" strokeWidth="4" strokeDasharray="7 5"/><path d="M94 19 L107 29 L93 38" fill="none" stroke="currentColor" strokeWidth="4"/><line x1="121" y1="73" x2="159" y2="73" stroke="currentColor" strokeWidth="2" strokeDasharray="4 4"/><text x="60" y="132" fontSize="11" fill="currentColor">sal de la línea central ↗</text></>}
+  </svg><span>{kind==='entry'?'La base cierra distancia antes de proyectar el torso.':kind==='guard'?'Toda combinación termina con manos recuperadas y postura lista.':'El último golpe conecta con un pivote o paso lateral inmediato.'}</span></article>;
 }
 
 function Card({title,items,tone,id}:{title:string;items:string[];tone:'good'|'focus'|'neutral';id?:string}) { return <div className={`card ${tone}`} id={id}><h3>{title}</h3>{items.length?items.map((x,i)=><p key={`${i}-${x}`}><span>{String(i+1).padStart(2,'0')}</span>{x}</p>):<p className="muted">Sin hallazgos adicionales.</p>}</div>; }
