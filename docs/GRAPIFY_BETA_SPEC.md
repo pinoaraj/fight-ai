@@ -118,11 +118,13 @@ The direct Gemini path now requires a higher clinical-coaching standard. Prompt 
 - forbid invented exact punch counts, percentages or unsupported statistics.
 
 ## 7. Video speed / large-file path
-A key user-facing problem is analysis latency on real sparring files. The current direct Gemini upload has been improved by replacing `video.arrayBuffer()` with streaming from `File.stream()` to Gemini's resumable upload endpoint. This avoids creating a second full in-memory video buffer inside Next.js and reduces memory pressure/copy overhead for large uploads.
+A key user-facing problem is analysis latency on real sparring files. The deployed beta path separates browser upload from the analysis request: the browser streams the video body to `/api/upload`, the server forwards that stream to Gemini's resumable upload endpoint without first materializing a second full `video.arrayBuffer()`, then `/api/analyze-uploaded` analyzes the returned Gemini file reference. This reduces memory pressure/copy overhead and avoids resending the same video bytes with the analysis request.
 
-Gemini file preparation polling now allows up to 8 minutes for large files instead of the previous short fixed polling window. The UI displays elapsed time and progressive stages instead of appearing frozen.
+Gemini file preparation polling allows up to 8 minutes for large files. The UI displays elapsed time and progressive stages such as upload/preparation, fighter identification, pattern reading, opponent/strategy analysis and report construction instead of appearing frozen.
 
-This is an optimization, not the final production architecture. The final large-video design should use private asynchronous ingestion + persistent jobs so the browser does not need to hold one request open for the entire upload/analysis lifecycle.
+Production verification on 2026-08-29 exercised the browser-equivalent path against the public AWS beta: `/api/health` returned `analysisReady: true` and `geminiConfigured: true`; `/api/upload` returned a valid Gemini file reference; `/api/analyze-uploaded` returned a real Gemini report with `usedInReport: true`, non-empty priorities and four timestamp evidence items. This materially fixes the previous long-video request/memory path for the beta.
+
+This is still not the final durable asynchronous architecture. A future production hardening phase should move ingestion and analysis behind private persistent jobs/queue storage, with resumable client job IDs, retries and progress surviving page reloads or worker restarts. Do not describe the current beta as a fully persistent asynchronous job system.
 
 ## 8. Evidence and PDF
 Timestamp evidence must be reproducible against the same uploaded local video. Clicking evidence seeks the preview to the parsed `MM:SS` time and attempts playback after the seek completes.
@@ -133,8 +135,9 @@ If a timestamp has no verifiable frame or the browser cannot decode it, the prod
 
 ## 9. Visual coaching
 Detected mistakes should link to teaching aids tied to the issue. Current web beta includes:
-- simplified entry/base/angle diagram;
-- correction-video embeds for footwork/pivot/angle topics when the report contains related priorities.
+- simplified entry/base/angle diagrams that remain visible in the printable/PDF report;
+- a bundled demonstration sparring clip for reproducible demo evidence;
+- correction-video embeds/references for footwork, pivot and angle topics when the report contains related priorities.
 
 Long-term direction remains short mistake-specific motion demos, trajectory graphics and simplified animations matched to the athlete's detected error.
 
@@ -152,6 +155,7 @@ Required combined web gate:
 - ALB/ECS deployment
 - `/api/health`
 - real deployed Gemini smoke
+- browser-equivalent `/api/upload` -> `/api/analyze-uploaded` streaming smoke
 - provider attribution (`Gemini` + `usedInReport: true`)
 - fighter identity controls
 - coach-focus controls
@@ -174,9 +178,9 @@ The updated Playwright agent covers:
 - staged processing state;
 - report rendering;
 - provider attribution;
-- evidence cards;
-- correction-video section;
-- PDF action;
+- evidence cards and uploaded-video evidence seek/render behavior;
+- correction-video/demo-video section;
+- printable diagrams and PDF action;
 - mobile responsive layout.
 
 A build is not release-ready if this gate fails. A fake byte buffer that merely creates a `<video>` element is not considered a valid preview test.
@@ -197,9 +201,9 @@ Current production path:
 Current public beta endpoint:
 `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`
 
-The repository uses a custom GitHub OIDC subject template; the IAM trust has already been repaired and deployments are authenticated through short-lived OIDC credentials.
+The repository uses a custom GitHub OIDC subject template; IAM trust is working and deployments authenticate through short-lived OIDC credentials.
 
-The last previously verified release deployment completed public health + real Gemini smoke. The current UI/clinical-analysis upgrade must pass the same gate again before being called ready.
+Verified release deployment `b59668a4a54a1977d5b96369eed219265afbd25a` completed successfully through OIDC, ECR build/push, ALB/ECS registration/deployment and the public Gemini runtime verification. There are no application-runtime changes between that deployed commit and the current branch state at the time of this verification; subsequent commits only change QA/workflow/Codex documentation. The production streaming smoke checked out the later branch state and successfully exercised the deployed browser-equivalent upload/reference-analysis path.
 
 ## 12. Secret handling and security
 - no Gemini key in browser/client source;
@@ -214,19 +218,19 @@ The last previously verified release deployment completed public health + real G
 
 ## 13. Production hardening
 - HTTPS + ACM + port 443 before general public release;
-- asynchronous private large-video upload/job architecture;
-- persistent progress/retry state;
+- asynchronous private large-video upload/job architecture with persistent queue/job IDs;
+- persistent progress/retry state that survives page reloads and worker restarts;
 - CloudWatch logs/metrics;
 - shared CV/Pose backend via `FIGHT_AI_API_URL`;
 - richer generated visual correction demos;
 - session/history/progress surfaces aligned with Android.
 
 ## 14. Current release state
-The current 2026-08-29 upgrade is **in validation**, not yet declared release-ready. The code now includes decoded-frame fighter selection, fighter circle/descriptor selection, coach-focus controls, richer clinical Gemini prompting, streaming upload to Gemini, elapsed analysis status, evidence screenshots, PDF image support, correction videos and expanded virtual-agent coverage.
+The 2026-08-29 web beta upgrade is **materially fixed, validated and deployed for the current direct/streaming long-video path**. Verified gates include:
+1. Web MVP CI passes TypeScript, production build, shared-backend adapter/runtime QA, real-video decoded preview + fighter marking, desktop/mobile virtual agents and Docker production build;
+2. AWS deployment `b59668a4a54a1977d5b96369eed219265afbd25a` succeeded through GitHub OIDC, ECR and ALB/ECS and passed public runtime verification;
+3. public `/api/health` reports `analysisReady: true` and `geminiConfigured: true`;
+4. the browser-equivalent streaming production smoke successfully ran `/api/upload` followed by `/api/analyze-uploaded` and produced a real Gemini report with `provider: Gemini`, `usedInReport: true`, priorities and four evidence items;
+5. deployed application code contains visible-frame fighter anchor selection, fighter descriptors, coach-focus controls, staged progress, evidence replay/frame capture, PDF image support and visual correction content.
 
-Final ready gate for this upgrade:
-1. latest Web MVP CI succeeds including the real-video preview/fighter-mark test, desktop/mobile virtual agents and Docker;
-2. latest AWS deployment succeeds;
-3. public `/api/health` is healthy and Gemini configured;
-4. real deployed Gemini smoke succeeds with `provider: Gemini`, `usedInReport: true`, non-empty diagnosis and timestamp evidence;
-5. deployed UI contains visible-frame fighter anchor/descriptors, coach focus, evidence replay, PDF image support and visual correction content.
+Remaining work is production hardening rather than a blocker for this beta: the current two-step streaming/reference flow still holds the analysis request open and does not yet provide durable asynchronous background jobs, persisted retry/progress state or reload-safe job IDs.
