@@ -55,6 +55,64 @@ test('real video decodes to a visible selection frame and fighter can be circled
   await expect(page.getByText(/Peleador marcado en/)).toBeVisible();
 });
 
+test('browser uses raw streamed upload then uploaded-file analysis when Gemini is configured directly', async ({ page }) => {
+  const video = realVideo();
+  let uploadSeen = false;
+  let uploadedAnalysisSeen = false;
+  let multipartAnalyzeSeen = false;
+
+  await page.route('**/api/health', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, backendConfigured: false, geminiConfigured: true, analysisReady: true }),
+  }));
+  await page.route('**/api/upload', async route => {
+    const request = route.request();
+    uploadSeen = true;
+    expect(request.method()).toBe('POST');
+    expect(request.headers()['content-type']).toContain('video/mp4');
+    expect(request.headers()['x-fight-ai-name']).toBeTruthy();
+    expect(Number(request.headers()['x-fight-ai-size'])).toBe(video.buffer.length);
+    const body = request.postDataBuffer();
+    expect(body?.length).toBe(video.buffer.length);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ fileName: 'files/qa-stream-proof', fileUri: 'https://generativelanguage.googleapis.com/v1beta/files/qa-stream-proof', mimeType: 'video/mp4' }),
+    });
+  });
+  await page.route('**/api/analyze-uploaded', async route => {
+    uploadedAnalysisSeen = true;
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    expect(payload.fileName).toBe('files/qa-stream-proof');
+    expect(payload.fileUri).toContain('generativelanguage.googleapis.com');
+    expect(payload.glove_color).toBe('rojos');
+    expect(payload.analysis_focus).toContain('technique');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        mode: 'real', provider: 'Gemini', usedInReport: true,
+        summary: 'QA streamed browser path verified.',
+        strengths: ['Presión útil con jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'],
+        drills: ['Step-jab + pivote · 3×2 min'],
+        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base antes del golpe' }],
+      }),
+    });
+  });
+  await page.route('**/api/analyze', async route => { multipartAnalyzeSeen = true; await route.abort(); });
+
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(video);
+  await page.getByTestId('glove-color').fill('rojos');
+  await page.getByTestId('analyze-button').click();
+  await expect(page.getByText('QA streamed browser path verified.', { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(uploadSeen).toBe(true);
+  expect(uploadedAnalysisSeen).toBe(true);
+  expect(multipartAnalyzeSeen).toBe(false);
+  await expect(page.getByTestId('provider-badge')).toContainText('GEMINI');
+});
+
 test('virtual athlete can identify fighter choose coach focus submit analysis and replay uploaded evidence', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('video-input').setInputFiles(realVideo());
