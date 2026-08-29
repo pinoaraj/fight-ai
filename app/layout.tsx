@@ -7,6 +7,7 @@ import './mobile-fix.css';
 import './upload-emphasis.css';
 import './layout-density.css';
 import './status-ui.css';
+import './hero-priority.css';
 
 export const metadata: Metadata = {
   title: 'Fight AI',
