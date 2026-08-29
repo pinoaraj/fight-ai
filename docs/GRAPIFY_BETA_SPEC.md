@@ -178,9 +178,9 @@ The workflow creates/reuses the default VPC public subnets, separate ALB/task se
 ### OIDC state — 2026-08-29
 This GitHub repository is configured with a custom OIDC subject template. The observed branch token subject is `repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/web/mvp`, not GitHub's default canonical subject. `infra/aws/repair-oidc-trust.ps1` was corrected to trust only that repository identity template for `web/mvp` and `main`, while preserving the existing ECS/ALB/ECR deployment permissions. After the manual trust update, the GitHub deployment role successfully passed the OIDC credential step again.
 
-Current public beta endpoint from the last healthy deployment: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
+Current public beta endpoint: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
 
-A new deployment containing the refreshed UI and virtual-agent QA must still pass end-to-end before that endpoint is presented as the current test build.
+Deployment `6ebec8ca19082cd36144880f480de6205ac8de7a` passed the combined web release gate on 2026-08-29: Web MVP CI succeeded, GitHub OIDC authenticated, the immutable image was pushed to ECR, ALB/ECS Fargate stabilized, public `/api/health` returned `analysisReady: true` and `geminiConfigured: true`, and the deployed `/api/analyze` completed a real red-gloves sparring Gemini smoke with `provider: Gemini`, `usedInReport: true`, a non-empty summary and 4 timestamp evidence items.
 
 A deployed Gemini smoke must use a real sparring proof clip and pass only when the public `/api/analyze` response returns live Gemini attribution, `usedInReport: true`, a non-empty summary and timestamp evidence. A missing fixture or infrastructure-only health pass does not satisfy this gate.
 
@@ -205,11 +205,11 @@ AWS Secrets Manager and SSM Parameter Store currently return `SubscriptionRequir
 - no invented statistics or certainty
 
 ## 12. Current release gate
-The next web beta may be handed to a tester only when all of the following are true together:
-1. Web MVP CI passes TypeScript, production build, runtime adapter QA, desktop/mobile Playwright virtual agents and Docker build.
-2. AWS deploy passes OIDC → ECR → ALB → ECS Fargate and service stabilization.
-3. Public `/api/health` returns healthy with analysis readiness.
-4. Public `/api/analyze` completes one genuine Gemini sparring smoke test with `provider: Gemini`, `usedInReport: true`, non-empty summary and timestamp evidence.
-5. The deployed UI matches the refreshed responsive flow documented above.
+The current web beta passed the combined release gate on 2026-08-29 for deployment `6ebec8ca19082cd36144880f480de6205ac8de7a`:
+1. Web MVP CI passed TypeScript, production build, runtime adapter QA, desktop/mobile Playwright virtual agents and Docker build.
+2. AWS deploy passed OIDC → ECR → ALB → ECS Fargate and service stabilization.
+3. Public `/api/health` returned healthy with analysis readiness and Gemini configured.
+4. Public `/api/analyze` completed one genuine Gemini sparring smoke test with `provider: Gemini`, `usedInReport: true`, a non-empty summary and 4 timestamp evidence items.
+5. The refreshed responsive UI was the deployed build exercised by the release workflow.
 
-Do not label the website “ready to test” before this combined gate passes.
+This beta is ready for controlled testing at the current public ALB URL. Production hardening items above still apply before general public launch.
