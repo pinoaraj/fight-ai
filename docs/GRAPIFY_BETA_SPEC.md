@@ -38,12 +38,16 @@ Gemini may be credited only after an authenticated request succeeds and accepted
 ## 3. Fighter identity
 Target selection must be explicit and Android-like. The preferred web flow is:
 1. upload/preview the video;
-2. visually circle/mark the fighter on the video frame;
-3. optionally adjust circle size;
-4. provide visible descriptors such as glove color, clothing, relative height, build and free-form notes;
-5. provide stance and discipline;
-6. keep identity through temporal continuity and descriptors;
-7. exclude low-confidence windows from evidence instead of silently switching fighters.
+2. decode and seek to a non-zero visible frame automatically instead of presenting a black `00:00` selection surface;
+3. let the athlete scrub/pause at any clearer moment;
+4. visually circle/mark the fighter on that visible frame;
+5. optionally adjust circle size;
+6. provide visible descriptors such as glove color, clothing, relative height, build and free-form notes;
+7. provide stance and discipline;
+8. keep identity through temporal continuity and descriptors;
+9. exclude low-confidence windows from evidence instead of silently switching fighters.
+
+Marking mode must never darken or cover the video image. The click layer is transparent so the athlete sees the exact fighter being selected. The mark records both frame-relative coordinates and the video time used for the anchor.
 
 Web multipart identity fields now include:
 - `athlete_marker`
@@ -55,6 +59,7 @@ Web multipart identity fields now include:
 - `anchor_x`
 - `anchor_y`
 - `anchor_size`
+- `anchor_time`
 - `stance`
 
 ## 4. Mobile baseline
@@ -68,8 +73,8 @@ Stack: Next.js 15.5.24 + React 19 + TypeScript.
 ### Current web analysis flow
 The current upgraded web flow contains:
 - responsive desktop/mobile workspace;
-- upload + local preview;
-- visual fighter circle/anchor on the video;
+- upload + local preview with automatic seek to an early decoded non-zero frame;
+- visual fighter circle/anchor on a visible paused video frame, with manual timeline scrubbing before selection;
 - identity descriptors: glove color, clothing, height, build and free-form characteristics;
 - discipline, stance and language;
 - selectable virtual-coach focus areas: boxing technique, weaknesses, strategy, defense, offense, footwork, distance/timing plus custom focus text;
@@ -85,6 +90,8 @@ The current upgraded web flow contains:
 
 ### Product acceptance criteria
 Web is not release-ready unless:
+- the local video actually decodes to a visible non-zero frame before visual fighter marking is enabled;
+- marking mode preserves full frame visibility;
 - selected fighter can be identified visually or with descriptors;
 - analysis focus selections are sent to the engine and affect prompt context;
 - report clearly states if Gemini participated;
@@ -98,7 +105,7 @@ Web is not release-ready unless:
 When the shared Fight AI backend is absent, the web server uses Gemini server-side. The browser never receives the Gemini key.
 
 The direct Gemini path now requires a higher clinical-coaching standard. Prompt requirements include:
-- identify only the selected fighter using anchor coordinates + descriptors + temporal continuity;
+- identify only the selected fighter using anchor coordinates + anchor time + descriptors + temporal continuity;
 - separate visible facts from tactical hypotheses;
 - inspect guard recovery, balance/base, weight transfer, entries, exits, head movement, defense after combinations, range, timing, pivots/angles, footwork, punch selection, rhythm, pressure, reactions to the jab, body work and decision-making when visible;
 - find recurring patterns across the video rather than isolated generic mistakes;
@@ -137,6 +144,8 @@ Required combined web gate:
 - Next.js production build
 - shared-backend adapter/runtime QA
 - Playwright virtual web agents on desktop and Pixel-class mobile viewport
+- real MP4 decode + non-zero preview frame assertion
+- fighter-circle click on the decoded frame
 - Docker production build
 - AWS OIDC
 - ECR push
@@ -156,6 +165,8 @@ Required combined web gate:
 The updated Playwright agent covers:
 - demo report and truthful provider state;
 - upload/preview;
+- decoding the real regression MP4 to `readyState >= 2`, non-zero video dimensions and a non-zero selected preview time;
+- visual fighter marking on the decoded frame;
 - fighter descriptor input;
 - coach focus selection including footwork;
 - sport/stance selection;
@@ -168,7 +179,7 @@ The updated Playwright agent covers:
 - PDF action;
 - mobile responsive layout.
 
-A build is not release-ready if this gate fails.
+A build is not release-ready if this gate fails. A fake byte buffer that merely creates a `<video>` element is not considered a valid preview test.
 
 ## 11. AWS beta architecture
 Current production path:
@@ -211,11 +222,11 @@ The last previously verified release deployment completed public health + real G
 - session/history/progress surfaces aligned with Android.
 
 ## 14. Current release state
-The current 2026-08-29 upgrade is **in validation**, not yet declared release-ready. The code now includes fighter circle/descriptor selection, coach-focus controls, richer clinical Gemini prompting, streaming upload to Gemini, elapsed analysis status, evidence screenshots, PDF image support, correction videos and expanded virtual-agent coverage.
+The current 2026-08-29 upgrade is **in validation**, not yet declared release-ready. The code now includes decoded-frame fighter selection, fighter circle/descriptor selection, coach-focus controls, richer clinical Gemini prompting, streaming upload to Gemini, elapsed analysis status, evidence screenshots, PDF image support, correction videos and expanded virtual-agent coverage.
 
 Final ready gate for this upgrade:
-1. latest Web MVP CI succeeds including desktop/mobile virtual agents and Docker;
+1. latest Web MVP CI succeeds including the real-video preview/fighter-mark test, desktop/mobile virtual agents and Docker;
 2. latest AWS deployment succeeds;
 3. public `/api/health` is healthy and Gemini configured;
 4. real deployed Gemini smoke succeeds with `provider: Gemini`, `usedInReport: true`, non-empty diagnosis and timestamp evidence;
-5. deployed UI contains fighter anchor/descriptors, coach focus, evidence replay, PDF image support and visual correction content.
+5. deployed UI contains visible-frame fighter anchor/descriptors, coach focus, evidence replay, PDF image support and visual correction content.
