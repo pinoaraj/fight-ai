@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,61 +25,18 @@ jobs:
         run: npm run typecheck
       - name: Production build
         run: npm run build
+
       - name: Shared-backend adapter + web runtime QA
         run: |
           set -euo pipefail
-          cat >/tmp/mock_backend.py <<'PY'
-          from http.server import BaseHTTPRequestHandler, HTTPServer
-          import json
-
-          class Handler(BaseHTTPRequestHandler):
-              def log_message(self, format, *args):
-                  return
-
-              def _send(self, payload):
-                  body = json.dumps(payload).encode()
-                  self.send_response(200)
-                  self.send_header('Content-Type', 'application/json')
-                  self.send_header('Content-Length', str(len(body)))
-                  self.end_headers()
-                  self.wfile.write(body)
-
-              def do_GET(self):
-                  if self.path == '/health':
-                      self._send({'asyncJobs': False})
-                  else:
-                      self.send_error(404)
-
-              def do_POST(self):
-                  if self.path != '/analyze':
-                      self.send_error(404)
-                      return
-                  length = int(self.headers.get('content-length', '0'))
-                  if length:
-                      self.rfile.read(length)
-                  self._send({'report': {
-                      'mainTakeaway': 'Mock backend contract OK',
-                      'strengths': [{'title': 'Jab', 'description': 'Visible', 'timestamps': [2]}],
-                      'weaknesses': [{'title': 'Guardia', 'description': 'Recuperar mano', 'recommendation': 'Volver a mejilla', 'timestamps': [4]}],
-                      'drills': [{'name': 'Jab-reset', 'duration': '2 min', 'goal': 'Recuperación'}],
-                      'nextSessionGoals': ['Salir con guardia'],
-                      'strategy': {'opponentAnalysis': {'observedOpponentPatterns': [], 'tacticalHypotheses': [], 'rematchPlan': ['Jab y salida']}},
-                      'realVision': {'videoAI': {'usedInReport': False}}
-                  }})
-
-          HTTPServer(('127.0.0.1', 8787), Handler).serve_forever()
-          PY
-
-          python /tmp/mock_backend.py >/tmp/mock-backend.log 2>&1 &
+          python qa/web-agent/mock_backend.py >/tmp/mock-backend.log 2>&1 &
           MOCK_PID=$!
           FIGHT_AI_API_URL=http://127.0.0.1:8787 npm run start >/tmp/fight-ai-web.log 2>&1 &
           WEB_PID=$!
           trap 'kill $WEB_PID $MOCK_PID >/dev/null 2>&1 || true' EXIT
 
           for i in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3000/api/health >/tmp/health.json; then
-              break
-            fi
+            if curl --fail --silent http://127.0.0.1:3000/api/health >/tmp/health.json; then break; fi
             sleep 1
           done
 
@@ -96,7 +53,7 @@ jobs:
             -F 'video=@/tmp/fight-ai-smoke.mp4;type=video/mp4' \
             -F 'language=es' \
             -F 'sport=boxing' \
-            -F 'athlete_marker=red-gloves' \
+            -F 'athlete_marker=red_gloves' \
             -F 'stance=orthodox' \
             http://127.0.0.1:3000/api/analyze >/tmp/report.json
 
@@ -109,5 +66,23 @@ jobs:
           if (!Array.isArray(report.evidence) || report.evidence.length < 2) throw new Error('timestamp evidence normalization failed');
           if (!Array.isArray(report.drills) || !report.drills[0]?.includes('Jab-reset')) throw new Error('drill normalization failed');
           NODE
+
+      - name: Install virtual agent browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Virtual web agents — desktop + mobile journeys
+        run: |
+          set -euo pipefail
+          python qa/web-agent/mock_backend.py >/tmp/agent-mock-backend.log 2>&1 &
+          MOCK_PID=$!
+          FIGHT_AI_API_URL=http://127.0.0.1:8787 npm run start >/tmp/agent-fight-ai-web.log 2>&1 &
+          WEB_PID=$!
+          trap 'kill $WEB_PID $MOCK_PID >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/health >/dev/null; then break; fi
+            sleep 1
+          done
+          npm run qa:agent
+
       - name: Production container build
         run: docker build -t fight-ai-web:${{ github.sha }} .
