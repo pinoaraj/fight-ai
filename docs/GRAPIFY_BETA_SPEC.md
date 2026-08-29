@@ -42,7 +42,7 @@ Target selection must be explicit and Android-like. The preferred web flow is:
 3. let the athlete scrub/pause at any clearer moment;
 4. visually circle/mark the fighter on that visible frame;
 5. optionally adjust circle size;
-6. provide visible descriptors such as glove color, clothing, relative height, build and free-form notes;
+6. provide visible descriptors such as glove color, clothing, relative height, build and free-form notes; quick glove-color choices must be available when marking is impractical;
 7. provide stance and discipline;
 8. keep identity through temporal continuity and descriptors;
 9. exclude low-confidence windows from evidence instead of silently switching fighters.

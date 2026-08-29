@@ -32,6 +32,39 @@
   letter-spacing: .06em;
 }
 
+.identityQuick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  margin: 0 0 10px;
+}
+
+.identityQuick span {
+  color: #9ba7b2;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .07em;
+}
+
+.identityQuick button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid #47545e;
+  border-radius: 6px;
+  background: #0d1116;
+  color: #d6dce2;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.identityQuick button.active,
+.identityQuick button:hover {
+  border-color: #d6a93b;
+  background: #d6a93b18;
+  color: #f0ce78;
+}
+
 @media print {
   .evidencePlayer img { display: block !important; }
 }
