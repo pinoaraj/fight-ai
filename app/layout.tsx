@@ -8,6 +8,7 @@ import './upload-emphasis.css';
 import './layout-density.css';
 import './status-ui.css';
 import './hero-priority.css';
+import './evidence-compat.css';
 
 export const metadata: Metadata = {
   title: 'Fight AI',

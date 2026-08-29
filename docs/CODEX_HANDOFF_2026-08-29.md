@@ -8,6 +8,8 @@
 
 Do not restart either client from scratch. Continue from these branches and preserve the shared report semantics, fighter identity controls, truthful provider attribution and evidence-first coaching contract.
 
+For HEVC/Main10 and other browser-incompatible phone codecs, selected report evidence must render the server-extracted JPEG capture at that timestamp, not a black browser video. The same real captures are printable in the PDF.
+
 ## Access and infrastructure contract for Codex
 
 Codex should operate through the existing repository and short-lived/federated credentials only. Do **not** add long-lived AWS keys, Gemini keys, passwords or tokens to source control.

@@ -147,7 +147,9 @@ export default function Home() {
     let cancelled = false;
     (async () => {
       const next: Record<string,string> = {};
-      for (const e of report.evidence.slice(0, 4)) next[e.time] = await captureFrame(reportVideoSrc, seconds(e.time));
+      if (!fallbackFrameUrl) {
+        for (const e of report.evidence.slice(0, 4)) next[e.time] = await captureFrame(reportVideoSrc, seconds(e.time));
+      }
       const missing = report.evidence.slice(0, 4).filter((e) => !next[e.time]);
       // HEVC Main 10 and some phone codecs cannot be painted by Chrome. Ask
       // FFmpeg for the exact report timestamps so printed PDF evidence stays real.
@@ -166,7 +168,7 @@ export default function Home() {
       if (!cancelled) setFrames(next);
     })();
     return () => { cancelled = true; };
-  }, [report, reportVideoSrc, video]);
+  }, [report, reportVideoSrc, video, fallbackFrameUrl]);
 
   function selectVideo(file: File | null) {
     if (fallbackFrameUrl) URL.revokeObjectURL(fallbackFrameUrl);
@@ -367,20 +369,21 @@ export default function Home() {
       {busy && <div className="processingCard" data-testid="processing-state" role="status" aria-live="polite"><div className="spinner"/><div><div className="processingMeta"><b>TRABAJANDO · {processingSteps[processingStep].typical}</b><time>{elapsedLabel}</time></div><strong>{processingSteps[processingStep].title}</strong><span>{processingSteps[processingStep].detail} {waitGuidance}</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
       {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span>{uploadedSession && !busy && <button data-testid="retry-uploaded-analysis" onClick={retryUploadedAnalysis}>REINTENTAR ANÁLISIS SIN VOLVER A SUBIR</button>}</div>}
     </aside>
-    <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>REPORTE DE COACHING</span><div className="emptyRing">◎</div><h2>Un plan claro para tu próxima sesión</h2><p>Sube el round, identifica a tu atleta y recibe tres prioridades con evidencia que puedes volver a reproducir.</p><div className="emptyTags"><span>01 · MOMENTOS VISIBLES</span><span>02 · CORRECCIONES CONCRETAS</span><span>03 · DRILLS Y PLAN VS RIVAL</span></div><div className="pdfPreview">↓ TU REPORTE INCLUIRÁ DESCARGA PDF</div><button data-testid="demo-report-button" className="emptyDemo" onClick={showDemo}>EXPLORAR REPORTE DEMO →</button></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc}/>}</section></section>
+    <section className="panel reportPanel" id="report" ref={reportRef} data-testid="report-panel">{!report?<div className="empty"><span>REPORTE DE COACHING</span><div className="emptyRing">◎</div><h2>Un plan claro para tu próxima sesión</h2><p>Sube el round, identifica a tu atleta y recibe tres prioridades con evidencia que puedes volver a reproducir.</p><div className="emptyTags"><span>01 · MOMENTOS VISIBLES</span><span>02 · CORRECCIONES CONCRETAS</span><span>03 · DRILLS Y PLAN VS RIVAL</span></div><div className="pdfPreview">↓ TU REPORTE INCLUIRÁ DESCARGA PDF</div><button data-testid="demo-report-button" className="emptyDemo" onClick={showDemo}>EXPLORAR REPORTE DEMO →</button></div>:<ReportView report={report} onJumpMain={jumpMainPreview} frames={frames} mediaSrc={reportVideoSrc} sourceNeedsFrames={Boolean(fallbackFrameUrl)}/>}</section></section>
     <footer>Fight AI · Herramienta de apoyo técnico. La decisión final pertenece al atleta y su entrenador.</footer>
   </main>;
 }
 
 function SectionTitle({n,title,subtitle,extraClass=''}:{n:string;title:string;subtitle:string;extraClass?:string}) { return <div className={`sectionTitle ${extraClass}`}><span>{n}</span><div><b>{title}</b><small>{subtitle}</small></div></div>; }
 
-function ReportView({report,onJumpMain,frames,mediaSrc}:{report:Report;onJumpMain:(time:string)=>void;frames:Record<string,string>;mediaSrc:string}) {
+function ReportView({report,onJumpMain,frames,mediaSrc,sourceNeedsFrames}:{report:Report;onJumpMain:(time:string)=>void;frames:Record<string,string>;mediaSrc:string;sourceNeedsFrames:boolean}) {
   const footworkIssue = report.priorities.some(x=>/foot|pie|pies|base|piv|ángulo|distancia|entrada|salida/i.test(x));
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(report.evidence[0] || null);
   const evidenceVideoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => { setSelectedEvidence(report.evidence[0] || null); }, [report]);
   function playEvidence(e: Evidence) {
     setSelectedEvidence(e);
+    if (sourceNeedsFrames) return;
     const node = evidenceVideoRef.current;
     if (node && mediaSrc) {
       const target = seconds(e.time);
@@ -404,7 +407,7 @@ function ReportView({report,onJumpMain,frames,mediaSrc}:{report:Report;onJumpMai
     <section className="printDiagrams" data-testid="printable-diagrams"><div className="lessonHead"><span className="eyebrow">DIAGRAMAS DEL COACH · INCLUIDOS EN PDF</span><h3>Tres referencias visuales para llevar al entrenamiento</h3></div><div className="diagramGrid"><TechniqueDiagram kind="entry" title="1 · Entrada con base"/><TechniqueDiagram kind="guard" title="2 · Recupera guardia"/><TechniqueDiagram kind="pivot" title="3 · Sal por ángulo"/></div></section>
     <section className="lessonSection"><div className="lessonHead"><span className="eyebrow">VIDEOS DE CORRECCIÓN</span><h3>{footworkIssue?'Footwork, pivote y salidas':'Fundamentos aplicables a tu prioridad principal'}</h3></div><div className="lessonGrid"><article><iframe src="https://www.youtube.com/embed/-OK0kpv58Rk" title="Cómo mejorar footwork de boxeo" allowFullScreen/><b>Footwork: cómo corregirlo</b><span>Tony Jeffries · usa este video para comparar base, desplazamiento y pies demasiado abiertos.</span></article><article><iframe src="https://www.youtube.com/embed/hNclexRmDsY" title="Cómo pivotar en boxeo" allowFullScreen/><b>Pivote y salida por ángulo</b><span>Tony Jeffries · referencia visual para no quedar frente al rival después de atacar.</span></article></div></section>
     <h3 className="evidenceTitle" id="evidence">EVIDENCIA REPRODUCIBLE <span>{report.evidence.length} momentos</span></h3>
-    {mediaSrc && selectedEvidence && <section className="evidenceViewer" data-testid="evidence-viewer"><div className="evidencePlayer"><video key={mediaSrc} data-testid="evidence-video" ref={evidenceVideoRef} src={mediaSrc} controls muted playsInline preload="auto" poster={frames[selectedEvidence.time] || undefined}/></div><div><span className="eyebrow">MOMENTO SELECCIONADO · {selectedEvidence.time}</span><h3>{selectedEvidence.title}</h3><p>{selectedEvidence.observation}</p><small><strong>CORRECCIÓN</strong>{selectedEvidence.correction}</small><button data-testid="replay-selected" onClick={()=>playEvidence(selectedEvidence)}>▶ REPRODUCIR DESDE {selectedEvidence.time}</button></div></section>}
+    {mediaSrc && selectedEvidence && <section className="evidenceViewer" data-testid="evidence-viewer"><div className="evidencePlayer">{sourceNeedsFrames ? (frames[selectedEvidence.time] ? <img data-testid="evidence-compatible-frame" src={frames[selectedEvidence.time]} alt={`Captura real del video en ${selectedEvidence.time}`}/> : <div className="evidenceFrameLoading">PREPARANDO<br/>CAPTURA REAL</div>) : <video key={mediaSrc} data-testid="evidence-video" ref={evidenceVideoRef} src={mediaSrc} controls muted playsInline preload="auto" poster={frames[selectedEvidence.time] || undefined}/>}</div><div><span className="eyebrow">MOMENTO SELECCIONADO · {selectedEvidence.time}</span><h3>{selectedEvidence.title}</h3><p>{sourceNeedsFrames && <span className="evidenceCompatibilityNote">Tu navegador no puede reproducir este códec; mostramos una captura JPEG real del mismo momento. </span>}{selectedEvidence.observation}</p><small><strong>CORRECCIÓN</strong>{selectedEvidence.correction}</small>{!sourceNeedsFrames && <button data-testid="replay-selected" onClick={()=>playEvidence(selectedEvidence)}>▶ REPRODUCIR DESDE {selectedEvidence.time}</button>}</div></section>}
     <div className="evidence">{report.evidence.length?report.evidence.map((e,i)=><button data-testid="evidence-item" key={`${i}-${e.time}`} className={selectedEvidence?.time===e.time?'selected':''} onClick={()=>playEvidence(e)}>{frames[e.time]?<img src={frames[e.time]} alt={`Captura del sparring en ${e.time}`}/>:<div className="framePlaceholder">CAPTURA<br/>PREPARANDO</div>}<time>{e.time}</time><div><b>{e.title}</b><span>{e.observation}</span><small><strong>CORRECCIÓN</strong>{e.correction}</small></div><em>▶</em></button>):<div className="noEvidence">Este reporte no devolvió timestamps verificables. Fight AI no inventa evidencia.</div>}</div>
   </div>;
 }

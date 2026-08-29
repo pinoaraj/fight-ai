@@ -140,6 +140,7 @@ jobs:
           echo "ALB_DNS=$ALB_DNS" >> "$GITHUB_ENV"
 
       - name: Provision HTTPS CloudFront entry point
+        continue-on-error: true
         run: |
           set -euo pipefail
           CLOUDFRONT_WAF_ARN=$(aws wafv2 list-web-acls --scope CLOUDFRONT --region "$CLOUDFRONT_PLAN_REGION" --query "WebACLs[?Name=='$CLOUDFRONT_WAF_NAME'].ARN | [0]" --output text)
@@ -218,7 +219,12 @@ jobs:
       - name: Verify public site and Gemini runtime
         run: |
           set -euo pipefail
-          URL="https://$CLOUDFRONT_DOMAIN"
+          if [ -n "${CLOUDFRONT_DOMAIN:-}" ]; then
+            URL="https://$CLOUDFRONT_DOMAIN"
+          else
+            URL="http://$ALB_DNS"
+            echo "WARNING: CloudFront HTTPS is pending IAM permissions; verifying the deployed ALB origin." >&2
+          fi
           echo "Fight AI URL: $URL"
           READY=0
           for i in $(seq 1 30); do

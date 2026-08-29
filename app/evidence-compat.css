@@ -1,0 +1,30 @@
+.evidencePlayer img,
+.evidenceFrameLoading {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #2a333c;
+  border-radius: 5px;
+  background: #000;
+}
+
+.evidencePlayer img {
+  display: block;
+  object-fit: contain;
+}
+
+.evidenceFrameLoading {
+  display: grid;
+  place-items: center;
+  color: #9ba7b2;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.evidenceCompatibilityNote { color: #d6a93b; }
+
+@media print {
+  .evidencePlayer img { display: block !important; }
+}
