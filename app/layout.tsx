@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 import './upgrade.css';
 import './design.css';
+import './redesign.css';
+import './mobile-fix.css';
 
 export const metadata: Metadata = {
   title: 'Fight AI',
