@@ -54,9 +54,11 @@ jobs:
           for key in safe_keys:
               if key in claims:
                   print(f'{key}={claims[key]}')
-          expected='repo:pinoaraj/fight-ai:ref:refs/heads/web/mvp'
+          expected='repo:pinoaraj@132783424/fight-ai@1348995885:ref:refs/heads/web/mvp'
           print(f'expected_sub={expected}')
           print(f'sub_matches_expected={claims.get("sub") == expected}')
+          if claims.get('sub') != expected:
+              raise SystemExit('Unexpected GitHub OIDC subject; refusing AWS deployment')
           PY
 
       - name: Configure AWS credentials through GitHub OIDC
@@ -195,7 +197,7 @@ jobs:
           python - <<'PY'
           import json
           data=json.load(open('/tmp/fight-ai-smoke-result.json',encoding='utf-8'))
-          assert data.get('mode') == 'live', data
+          assert data.get('mode') == 'real', data
           assert data.get('provider') == 'Gemini', data
           assert data.get('usedInReport') is True, data
           assert isinstance(data.get('summary'), str) and data['summary'].strip(), data
