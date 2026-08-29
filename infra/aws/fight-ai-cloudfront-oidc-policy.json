@@ -24,7 +24,8 @@
         "wafv2:AssociateWebACL",
         "pricingplanmanager:CreateSubscription",
         "pricingplanmanager:GetSubscription",
-        "pricingplanmanager:ListSubscriptions"
+        "pricingplanmanager:ListSubscriptions",
+        "freetier:GetAccountPlanState"
       ],
       "Resource": "*"
     }

@@ -27,7 +27,7 @@ The deployment path is GitHub Actions OIDC → ECR → ECS Fargate → ALB origi
 
 - Use the generated `https://*.cloudfront.net` domain for Android and iOS.
 - The ALB HTTP URL is an origin/debug endpoint only; do not share it as the mobile product URL.
-- CloudFront permissions are applied once to `FightAIGitHubDeployRole` by `infra/aws/grant-cloudfront-https-permissions.ps1` from an authorized AWS profile.
+- CloudFront permissions are applied to `FightAIGitHubDeployRole` by `infra/aws/grant-cloudfront-https-permissions.ps1` from an authorized AWS profile. Re-run it whenever the tracked policy changes, including its `freetier:GetAccountPlanState` eligibility permission.
 - Never commit or expose AWS credentials, Gemini keys, uploaded sparring videos or access tokens.
 
 ## Required verification before release
