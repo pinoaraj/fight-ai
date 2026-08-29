@@ -137,7 +137,7 @@ Current web production architecture:
 - container port: 3000
 - ALB listener: HTTP 80 for beta/test URL
 - health target: `/api/health`
-- GitHub Actions authentication: GitHub OIDC with immutable owner/repository subject IDs
+- GitHub Actions authentication: GitHub OIDC
 - deployment role: `FightAIGitHubDeployRole`
 - ECS task execution role: `FightAIEcsTaskExecutionRole`
 - cluster/service/task family: `fight-ai-web`
@@ -145,11 +145,13 @@ Current web production architecture:
 
 The workflow creates/reuses the default VPC public subnets, separate ALB/task security groups, ALB target group, listener, ECS cluster/service and immutable ECR image tag by Git commit.
 
-AWS compute is activated and deployment succeeds through GitHub OIDC, ECR image push, ALB creation, ECS Fargate service deployment and public health verification in `sa-east-1`.
+AWS compute is activated and a previous deployment reached ECR push, ALB/ECS deployment and healthy public `/api/health` in `sa-east-1`. The current deployment is temporarily blocked earlier at GitHub OIDC role assumption because the IAM trust policy was narrowed with a malformed GitHub subject containing numeric owner/repository IDs. GitHub's actual branch subject for this workflow is `repo:pinoaraj/fight-ai:ref:refs/heads/web/mvp`.
 
-Current public beta endpoint: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
+`infra/aws/repair-oidc-trust.ps1` now repairs only the trust relationship to allow the canonical `web/mvp` and `main` branch subjects and deliberately does not overwrite the existing ECS/ALB/ECR inline permissions. After that one manual IAM update, the deployment workflow can resume.
 
-Verified health response reports `ok: true`, `service: fight-ai-web`, `geminiConfigured: true`, `analysisReady: true`, and `providerAttributionPolicy: usedInReport-required`.
+Current public beta endpoint from the last healthy deployment: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`.
+
+The last verified health response reported `ok: true`, `service: fight-ai-web`, `geminiConfigured: true`, `analysisReady: true`, and `providerAttributionPolicy: usedInReport-required`.
 
 A deployed Gemini smoke must use a real sparring proof clip and pass only when the public `/api/analyze` response returns live Gemini attribution, `usedInReport: true`, a non-empty summary and timestamp evidence. A missing fixture or infrastructure-only health pass does not satisfy this gate.
 
@@ -176,6 +178,7 @@ AWS Secrets Manager and SSM Parameter Store both currently return `SubscriptionR
 ## 12. Current workstreams
 1. `qa/cloud-android`: close authenticated Gemini + Android virtual-agent release gates and preserve Android as the canonical product-flow reference.
 2. `web/mvp`: replace the simplified MVP presentation with Android-parity upload → fighter selection → analysis options → processing → report → evidence/visuals → PDF flow.
-3. Harden large-video ingestion so real sparring files do not rely on one memory-heavy synchronous request; add persistent runtime logging.
-4. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
-5. Keep both clients aligned to this Grapify spec and the same report contract.
+3. Repair the GitHub OIDC trust relationship, then rerun ECS/ALB deployment and the real deployed Gemini smoke.
+4. Harden large-video ingestion so real sparring files do not rely on one memory-heavy synchronous request; add persistent runtime logging.
+5. Deploy/connect the shared CV/Pose analysis backend so mobile and web use the same full engine rather than relying on the web Gemini fallback.
+6. Keep both clients aligned to this Grapify spec and the same report contract.
