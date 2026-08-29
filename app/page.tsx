@@ -134,10 +134,25 @@ export default function Home() {
     (async () => {
       const next: Record<string,string> = {};
       for (const e of report.evidence.slice(0, 4)) next[e.time] = await captureFrame(reportVideoSrc, seconds(e.time));
+      const missing = report.evidence.slice(0, 4).filter((e) => !next[e.time]);
+      // HEVC Main 10 and some phone codecs cannot be painted by Chrome. Ask
+      // FFmpeg for the exact report timestamps so printed PDF evidence stays real.
+      if (missing.length && video && report.mode === 'real') {
+        try {
+          const response = await fetch(`/api/evidence-frames?times=${encodeURIComponent(missing.map((e) => seconds(e.time)).join(','))}`, {
+            method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4' }, body: video,
+          });
+          const data = response.ok ? await response.json() as { frames?: Record<string,string> } : null;
+          for (const evidence of missing) {
+            const frame = data?.frames?.[String(seconds(evidence.time))];
+            if (frame) next[evidence.time] = frame;
+          }
+        } catch { /* The report remains truthful and shows a pending capture. */ }
+      }
       if (!cancelled) setFrames(next);
     })();
     return () => { cancelled = true; };
-  }, [report, reportVideoSrc]);
+  }, [report, reportVideoSrc, video]);
 
   function selectVideo(file: File | null) {
     if (fallbackFrameUrl) URL.revokeObjectURL(fallbackFrameUrl);

@@ -64,6 +64,8 @@ Large-video direct-Gemini flow is intentionally split:
 3. browser sends the returned Gemini file reference plus fighter/context fields to `/api/analyze-uploaded`;
 4. server waits for ACTIVE state and generates the report.
 
+For browser-incompatible codecs (notably HEVC Main 10), `/api/preview-frame` creates the selectable JPEG and `/api/evidence-frames` creates up to four JPEG evidence thumbnails at the report's own timestamps. The source bytes are staged only on ephemeral task storage and removed after extraction; these thumbnails let the print/PDF view retain real video evidence instead of fabricated placeholders.
+
 When `FIGHT_AI_API_URL` is configured, `/api/analyze` remains the shared-backend adapter. Provider labels are truthful: Gemini is shown only when `usedInReport: true`.
 
 ## Web regression gate
