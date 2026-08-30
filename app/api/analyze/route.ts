@@ -96,24 +96,24 @@ function interactionOutputText(raw: unknown) {
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string) {
   const configured = process.env.GEMINI_MODEL?.trim();
   const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash'].filter(Boolean)));
-  let lastStatus = 0;
+  let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
         method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
       });
-      lastStatus = response.status; const body = await response.text();
+      lastStatus = response.status; retryAfter = Number(response.headers.get('retry-after') || 0); const body = await response.text();
       if (response.ok) {
         const text = interactionOutputText(JSON.parse(body) as unknown);
         if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
         return cleanGeminiJson(text);
       }
-      if ((response.status === 429 || response.status === 503) && attempt < 2) { await sleep(1500 * (attempt + 1)); continue; }
+      if ((response.status === 429 || response.status === 503) && attempt < 4) { await sleep(Math.max(retryAfter * 1000, 8000 * (attempt + 1))); continue; }
       break;
     }
   }
-  throw new Error(`Gemini rechazó el análisis (${lastStatus || 'sin estado'}).`);
+  throw new Error(lastStatus === 429 ? 'Gemini está temporalmente ocupado. Conservamos tu video: reintenta en 60 segundos sin volver a subirlo.' : `Gemini rechazó el análisis (${lastStatus || 'sin estado'}).`);
 }
 
 function field(source: FormData, key: string, fallback = '') { return String(source.get(key) || fallback).trim(); }
