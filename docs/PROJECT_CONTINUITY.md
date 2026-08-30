@@ -21,6 +21,12 @@ Do not restart either client or invent a second report schema. Keep Android and 
 4. HEVC/Main10 or another browser-incompatible codec uses server-side FFmpeg JPEG captures for fighter selection and evidence. It must never require the athlete to select a fighter from a black video surface.
 5. PDF download remains disabled until every report timestamp has a real evidence image. The report and PDF must never substitute black boxes or fabricated images for evidence.
 
+## Handoff status — 2026-08-29
+
+AWS resources for the durable large-video path exist: private encrypted S3 bucket `fight-ai-video-ingest-379549361550-sa-east-1` (two-day lifecycle), DynamoDB table `fight-ai-analysis-jobs`, and ECS task role `FightAIEcsTaskRole`. The bootstrap is `infra/aws/bootstrap-large-video-ingestion.ps1`.
+
+The web client still uses the prior upload relay and async job state in a process-memory map. This causes `El trabajo no está disponible` after an ECS restart/deploy. The next session must wire the existing DynamoDB table into `app/api/analyze-uploaded/route.ts`, make job creation/polling idempotent, and then connect the multipart S3 route (`app/api/direct-upload/route.ts`) to the browser and the Gemini ingestion path. Do not give public-mobile green light until the exact HEVC 275 MB Android/CloudFront journey completes with a real Gemini report, JPEG evidence for every timestamp, and an image-bearing PDF.
+
 ## Deploy and mobile access
 
 The deployment path is GitHub Actions OIDC → ECR → ECS Fargate → ALB origin → CloudFront HTTPS. GitHub Actions workflow: `.github/workflows/web-aws-deploy.yml`.
