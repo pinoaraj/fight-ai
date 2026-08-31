@@ -25,7 +25,7 @@ Do not restart either client or invent a second report schema. Keep Android and 
 
 AWS resources for the durable large-video path exist: private encrypted S3 bucket `fight-ai-video-ingest-379549361550-sa-east-1` (two-day lifecycle), DynamoDB table `fight-ai-analysis-jobs`, and ECS task role `FightAIEcsTaskRole`. The bootstrap is `infra/aws/bootstrap-large-video-ingestion.ps1`.
 
-The web client uses multipart S3 upload and `/api/analyze-uploaded` persists every job in DynamoDB. A conditional lease makes an active job recoverable after an ECS restart: a later poll can claim an expired lease and resume it without a second video upload. Jobs expire after two days. The pending release gate is operational verification: apply the S3 CORS/TTL section of the bootstrap with an authenticated `fight-ai` profile, deploy, then run the exact HEVC 275 MB Android/CloudFront journey through report evidence and PDF. Do not give public-mobile green light until that journey is successful.
+The web client uses multipart S3 upload and `/api/analyze-uploaded` persists every job in DynamoDB. A conditional lease makes an active job recoverable after an ECS restart: a later poll can claim an expired lease and resume it without a second video upload. Jobs expire after two days. S3 CORS is applied for the CloudFront mobile origin and DynamoDB TTL is enabled. The remaining release gate is the exact HEVC 275 MB Android/CloudFront journey through report evidence and PDF. Do not give public-mobile green light until that journey is successful.
 
 ## Deploy and mobile access
 

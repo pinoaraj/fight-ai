@@ -85,7 +85,7 @@ async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: stri
   const uploadUrl = start.headers.get('x-goog-upload-url');
   if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga.');
   const body = Readable.toWeb(object.Body as Readable);
-  const uploaded = await fetch(uploadUrl, { method: 'POST', headers: { 'Content-Length': String(object.ContentLength), 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' }, body, cache: 'no-store', duplex: 'half' } as RequestInit & { duplex: 'half' });
+  const uploaded = await fetch(uploadUrl, { method: 'POST', headers: { 'Content-Length': String(object.ContentLength), 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' }, body, cache: 'no-store', signal: AbortSignal.timeout(15 * 60 * 1000), duplex: 'half' } as RequestInit & { duplex: 'half' });
   if (!uploaded.ok) throw new Error(`Gemini no pudo cargar el video (${uploaded.status}).`);
   const info = await uploaded.json() as { file?: { name?: string; uri?: string } };
   if (!info.file?.name || !info.file.uri) throw new Error('Gemini no devolvió referencia del video.');
