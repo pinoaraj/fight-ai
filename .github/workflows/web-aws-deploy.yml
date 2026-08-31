@@ -257,24 +257,40 @@ jobs:
           PY
           test -s /tmp/fight-ai-red-gloves-smoke.mp4
 
-          HTTP_CODE=$(curl --max-time 600 -sS -o /tmp/fight-ai-smoke-result.json -w '%{http_code}' \
-            -F 'video=@/tmp/fight-ai-red-gloves-smoke.mp4;type=video/mp4' \
-            -F 'language=es' \
-            -F 'sport=boxing' \
-            -F 'athlete_marker=red_gloves' \
-            -F 'glove_color=red' \
-            -F 'stance=orthodox' \
-            "$URL/api/analyze")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "Gemini deployed smoke failed with HTTP $HTTP_CODE" >&2
-            python - <<'PY'
+          GEMINI_SMOKE_OK=0
+          for ATTEMPT in 1 2 3; do
+            HTTP_CODE=$(curl --max-time 600 -sS -o /tmp/fight-ai-smoke-result.json -w '%{http_code}' \
+              -F 'video=@/tmp/fight-ai-red-gloves-smoke.mp4;type=video/mp4' \
+              -F 'language=es' \
+              -F 'sport=boxing' \
+              -F 'athlete_marker=red_gloves' \
+              -F 'glove_color=red' \
+              -F 'stance=orthodox' \
+              "$URL/api/analyze")
+            if [ "$HTTP_CODE" = "200" ]; then
+              GEMINI_SMOKE_OK=1
+              break
+            fi
+            SAFE_ERROR=$(python - <<'PY'
           import json
           try:
               data=json.load(open('/tmp/fight-ai-smoke-result.json',encoding='utf-8'))
-              print('Safe analysis error:', data.get('error','unknown server error'))
+              print(data.get('error','unknown server error'))
           except Exception:
-              print('Safe analysis error: non-JSON response')
+              print('non-JSON response')
           PY
+          )
+            echo "Gemini deployed smoke attempt $ATTEMPT failed with HTTP $HTTP_CODE: $SAFE_ERROR" >&2
+            if echo "$SAFE_ERROR" | grep -Eqi 'temporalmente ocupado|temporarily busy|429|503'; then
+              if [ "$ATTEMPT" -lt 3 ]; then
+                sleep $((ATTEMPT * 30))
+                continue
+              fi
+            fi
+            break
+          done
+          if [ "$GEMINI_SMOKE_OK" -ne 1 ]; then
+            echo "Gemini deployed smoke did not complete after transient-capacity retries." >&2
             exit 1
           fi
           python - <<'PY'
