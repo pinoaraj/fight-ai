@@ -227,7 +227,7 @@ function buildSegmentPrompt(data: UploadedAnalysisRequest, index: number, count:
     '\nNo cambies de peleador si la identidad se vuelve dudosa. No inventes conteos, porcentajes, velocidad ni precisión.' +
     '\nBusca patrones visibles en guardia, base, entradas, salidas, defensa tras combinar, distancia, timing, ángulos, pivotes, footwork, golpes, ritmo, presión y lectura del rival.' +
     '\nConecta observación → consecuencia → corrección → drill. Usa 2–5 evidencias con timestamps MM:SS LOCALES de este segmento.' +
-    '\nDevuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.';
+    '\nsummary debe ser breve (1–2 frases) y específico para este segmento. Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.';
 }
 
 function mergeSegmentReports(parts: Record<string, unknown>[], offsets: number[]) {
@@ -326,9 +326,41 @@ async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (stat
   if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
     let fileName = val(data, 'fileName'); let fileUri = val(data, 'fileUri'); let mimeType = val(data, 'mimeType', 'video/mp4');
     if (!fileName || !fileUri) {
-      await updateJob?.('preparing');
-      const uploaded = await uploadS3VideoToGemini(data, apiKey, updateJob);
-      fileName = uploaded.fileName; fileUri = uploaded.fileUri; mimeType = uploaded.mimeType;
+      const preprocessingStartedAt = Date.now();
+      const segments = await prepareSignedSegments(data, updateJob);
+      const preprocessingMs = Date.now() - preprocessingStartedAt;
+      if (!segments.length) throw new Error('No se pudo preparar el round para análisis rápido.');
+      await updateJob?.('coaching');
+      const analysisStartedAt = Date.now();
+      const parts: Record<string, unknown>[] = [];
+      for (let offset = 0; offset < segments.length; offset += 3) {
+        const batch = segments.slice(offset, offset + 3);
+        const analyzed = await Promise.all(batch.map((segment, localIndex) =>
+          generateCoachJson(
+            apiKey,
+            buildSegmentPrompt(data, offset + localIndex, segments.length, segment.offset, segment.duration),
+            segment.uri,
+            'video/mp4',
+            true,
+          )
+        ));
+        parts.push(...analyzed);
+      }
+      const merged = mergeSegmentReports(parts, segments.map(segment => segment.offset));
+      const analysisMs = Date.now() - analysisStartedAt;
+      return {
+        mode: 'real', provider: 'Gemini', usedInReport: true,
+        summary: merged.summary || 'Análisis completado con Gemini.',
+        strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
+        plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
+        timings: {
+          preprocessing_ms: preprocessingMs,
+          gemini_processing_ms: analysisMs,
+          analysis_ms: analysisMs,
+          total_ms: Date.now() - startedAt,
+          clip_count: segments.length,
+        },
+      };
     }
     if (!fileName || !fileUri) throw new Error('Falta la referencia del video cargado.');
     if (!fileName.startsWith('files/') || !/^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri)) {
