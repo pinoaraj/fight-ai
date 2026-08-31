@@ -16,11 +16,12 @@ export async function POST(req: NextRequest) {
       const created = await s3.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: body.type || 'video/mp4', ServerSideEncryption: 'AES256' }));
       return NextResponse.json({ key, uploadId: created.UploadId });
     }
-    if (body.action === 'sign' && body.key && body.uploadId && body.partNumber) {
-      const url = await getSignedUrl(s3, new UploadPartCommand({ Bucket: bucket, Key: body.key, UploadId: body.uploadId, PartNumber: body.partNumber }), { expiresIn: 3600 });
+    const partNumber = body.partNumber;
+    if (body.action === 'sign' && body.key && body.key.startsWith('uploads/') && body.uploadId && typeof partNumber === 'number' && Number.isInteger(partNumber) && partNumber > 0 && partNumber <= 10000) {
+      const url = await getSignedUrl(s3, new UploadPartCommand({ Bucket: bucket, Key: body.key, UploadId: body.uploadId, PartNumber: partNumber }), { expiresIn: 3600 });
       return NextResponse.json({ url });
     }
-    if (body.action === 'complete' && body.key && body.uploadId && body.parts?.length) {
+    if (body.action === 'complete' && body.key && body.key.startsWith('uploads/') && body.uploadId && body.parts?.length && body.parts.every((part) => Number.isInteger(part.PartNumber) && part.PartNumber > 0 && part.PartNumber <= 10000 && typeof part.ETag === 'string')) {
       await s3.send(new CompleteMultipartUploadCommand({ Bucket: bucket, Key: body.key, UploadId: body.uploadId, MultipartUpload: { Parts: body.parts } }));
       return NextResponse.json({ key: body.key });
     }

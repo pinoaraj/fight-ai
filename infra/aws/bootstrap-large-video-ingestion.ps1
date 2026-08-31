@@ -26,10 +26,13 @@ if (-not $existingBucket) { Invoke-Aws @('s3api','create-bucket','--bucket',$Buc
 Invoke-Aws @('s3api','put-public-access-block','--bucket',$BucketName,'--public-access-block-configuration','BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true') | Out-Null
 Invoke-Aws @('s3api','put-bucket-encryption','--bucket',$BucketName,'--server-side-encryption-configuration','{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}') | Out-Null
 Invoke-Aws @('s3api','put-bucket-lifecycle-configuration','--bucket',$BucketName,'--lifecycle-configuration','{"Rules":[{"ID":"expire-private-sparring","Status":"Enabled","Filter":{"Prefix":"uploads/"},"Expiration":{"Days":2},"AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}') | Out-Null
+$cors = @{ CORSRules = @(@{ AllowedOrigins = @('https://d1ga34t3tjgix2.cloudfront.net','http://localhost:3000'); AllowedMethods = @('PUT'); AllowedHeaders = @('*'); ExposeHeaders = @('ETag'); MaxAgeSeconds = 3600 }) } | ConvertTo-Json -Depth 6 -Compress
+Invoke-Aws @('s3api','put-bucket-cors','--bucket',$BucketName,'--cors-configuration',$cors) | Out-Null
 
 & aws dynamodb describe-table --table-name $TableName --region $Region --profile $Profile 2>$null
 $table = $LASTEXITCODE -eq 0
 if (-not $table) { Invoke-Aws @('dynamodb','create-table','--table-name',$TableName,'--attribute-definitions','AttributeName=jobId,AttributeType=S','--key-schema','AttributeName=jobId,KeyType=HASH','--billing-mode','PAY_PER_REQUEST','--region',$Region) | Out-Null }
+Invoke-Aws @('dynamodb','update-time-to-live','--table-name',$TableName,'--time-to-live-specification','Enabled=true,AttributeName=expiresAt','--region',$Region) | Out-Null
 
 $trust = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
 & aws iam get-role --role-name $TaskRoleName --profile $Profile *> $null

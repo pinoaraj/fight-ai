@@ -15,8 +15,8 @@ Do not restart either client or invent a second report schema. Keep Android and 
 
 ## Current web behavior
 
-1. The browser uploads the selected sparring to `/api/upload`; the server streams it to Gemini.
-2. The browser starts `/api/analyze-uploaded?async=1`, receives a job descriptor (`id`, `status`) and polls for the final report.
+1. The browser splits the selected sparring into 8 MB parts and uploads them directly to the private S3 ingest bucket through short-lived signed URLs. The large MP4 never travels through CloudFront/ALB/ECS as a single viewer request.
+2. The browser starts `/api/analyze-uploaded?async=1`, receives a durable job descriptor (`id`, `status`) and polls for the final report. ECS reads the private S3 object and streams it to Gemini.
 3. A report credits Gemini only with `provider: "Gemini"` and `usedInReport: true`.
 4. HEVC/Main10 or another browser-incompatible codec uses server-side FFmpeg JPEG captures for fighter selection and evidence. It must never require the athlete to select a fighter from a black video surface.
 5. PDF download remains disabled until every report timestamp has a real evidence image. The report and PDF must never substitute black boxes or fabricated images for evidence.
@@ -25,7 +25,7 @@ Do not restart either client or invent a second report schema. Keep Android and 
 
 AWS resources for the durable large-video path exist: private encrypted S3 bucket `fight-ai-video-ingest-379549361550-sa-east-1` (two-day lifecycle), DynamoDB table `fight-ai-analysis-jobs`, and ECS task role `FightAIEcsTaskRole`. The bootstrap is `infra/aws/bootstrap-large-video-ingestion.ps1`.
 
-The web client still uses the prior upload relay and async job state in a process-memory map. This causes `El trabajo no está disponible` after an ECS restart/deploy. The next session must wire the existing DynamoDB table into `app/api/analyze-uploaded/route.ts`, make job creation/polling idempotent, and then connect the multipart S3 route (`app/api/direct-upload/route.ts`) to the browser and the Gemini ingestion path. Do not give public-mobile green light until the exact HEVC 275 MB Android/CloudFront journey completes with a real Gemini report, JPEG evidence for every timestamp, and an image-bearing PDF.
+The web client uses multipart S3 upload and `/api/analyze-uploaded` persists every job in DynamoDB. A conditional lease makes an active job recoverable after an ECS restart: a later poll can claim an expired lease and resume it without a second video upload. Jobs expire after two days. The pending release gate is operational verification: apply the S3 CORS/TTL section of the bootstrap with an authenticated `fight-ai` profile, deploy, then run the exact HEVC 275 MB Android/CloudFront journey through report evidence and PDF. Do not give public-mobile green light until that journey is successful.
 
 ## Deploy and mobile access
 

@@ -1,3 +1,6 @@
+import { AttributeValue, DynamoDBClient, GetItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { Readable } from 'node:stream';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
@@ -6,7 +9,7 @@ export const dynamic = 'force-dynamic';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 type UploadedAnalysisRequest = {
-  fileName?: string; fileUri?: string; mimeType?: string; language?: string; sport?: string; stance?: string;
+  fileName?: string; fileUri?: string; s3Key?: string; mimeType?: string; language?: string; sport?: string; stance?: string;
   glove_color?: string; top_color?: string; relative_height?: string; build?: string; fighter_notes?: string;
   anchor_x?: string; anchor_y?: string; anchor_size?: string; anchor_time?: string;
   analysis_focus?: string; custom_focus?: string;
@@ -19,13 +22,75 @@ type ReportPayload = {
   timings: { preprocessing_ms: number; gemini_processing_ms: number; analysis_ms: number; total_ms: number; clip_count: number };
 };
 type AnalysisJob = {
-  id: string; status: 'preparing' | 'coaching' | 'complete' | 'failed'; updatedAt: number;
-  report?: ReportPayload; error?: string;
+  id: string; status: 'queued' | 'preparing' | 'coaching' | 'complete' | 'failed'; updatedAt: number;
+  payload: UploadedAnalysisRequest; report?: ReportPayload; error?: string; leaseExpiresAt?: number;
 };
+const region = process.env.AWS_REGION || 'sa-east-1';
+const tableName = process.env.FIGHT_AI_JOBS_TABLE || '';
+const bucket = process.env.FIGHT_AI_INGEST_BUCKET || '';
+const dynamo = new DynamoDBClient({ region });
+const s3 = new S3Client({ region });
+const leaseMs = 12 * 60 * 1000;
+const workerId = crypto.randomUUID();
 
-const jobScope = globalThis as typeof globalThis & { __fightAiUploadedJobs?: Map<string, AnalysisJob> };
-const jobs = jobScope.__fightAiUploadedJobs ?? new Map<string, AnalysisJob>();
-jobScope.__fightAiUploadedJobs = jobs;
+function activeStatus(status: AnalysisJob['status']) {
+  return status === 'queued' || status === 'preparing' || status === 'coaching';
+}
+
+function itemToJob(item: Record<string, AttributeValue> | undefined): AnalysisJob | null {
+  if (!item?.jobId?.S || !item.status?.S || !item.payload?.S) return null;
+  try {
+    return {
+      id: item.jobId.S,
+      status: item.status.S as AnalysisJob['status'],
+      updatedAt: Number(item.updatedAt?.N || 0),
+      payload: JSON.parse(item.payload.S) as UploadedAnalysisRequest,
+      report: item.report?.S ? JSON.parse(item.report.S) as ReportPayload : undefined,
+      error: item.error?.S,
+      leaseExpiresAt: item.leaseExpiresAt?.N ? Number(item.leaseExpiresAt.N) : undefined,
+    };
+  } catch { return null; }
+}
+
+async function getJob(id: string) {
+  if (!tableName) throw new Error('La persistencia de análisis aún no está configurada.');
+  const response = await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { jobId: { S: id } }, ConsistentRead: true }));
+  return itemToJob(response.Item);
+}
+
+async function updateJob(id: string, status: AnalysisJob['status'], extra: { report?: ReportPayload; error?: string; clearLease?: boolean } = {}) {
+  if (!tableName) throw new Error('La persistencia de análisis aún no está configurada.');
+  const names: Record<string, string> = { '#status': 'status' };
+  const values: Record<string, AttributeValue> = {
+    ':status': { S: status }, ':updatedAt': { N: String(Date.now()) },
+  };
+  const sets = ['#status = :status', 'updatedAt = :updatedAt'];
+  if (extra.report) { values[':report'] = { S: JSON.stringify(extra.report) }; sets.push('report = :report'); }
+  if (extra.error) { values[':error'] = { S: extra.error.slice(0, 1200) }; sets.push('error = :error'); }
+  if (extra.clearLease) { values[':lease'] = { N: '0' }; sets.push('leaseExpiresAt = :lease'); }
+  await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { jobId: { S: id } }, UpdateExpression: `SET ${sets.join(', ')}`, ExpressionAttributeNames: names, ExpressionAttributeValues: values }));
+}
+
+async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: string) {
+  const key = val(data, 's3Key');
+  if (!key || !key.startsWith('uploads/') || !bucket) throw new Error('Referencia de video no válida.');
+  const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!object.Body || !object.ContentLength) throw new Error('No se pudo recuperar el video cargado.');
+  const mimeType = object.ContentType || val(data, 'mimeType', 'video/mp4');
+  const start = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+    method: 'POST', headers: { 'x-goog-api-key': apiKey, 'X-Goog-Upload-Protocol': 'resumable', 'X-Goog-Upload-Command': 'start', 'X-Goog-Upload-Header-Content-Length': String(object.ContentLength), 'X-Goog-Upload-Header-Content-Type': mimeType, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: { display_name: val(data, 'fileName', key).slice(0, 180) } }), cache: 'no-store',
+  });
+  if (!start.ok) throw new Error(`Gemini no pudo iniciar la carga (${start.status}).`);
+  const uploadUrl = start.headers.get('x-goog-upload-url');
+  if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga.');
+  const body = Readable.toWeb(object.Body as Readable);
+  const uploaded = await fetch(uploadUrl, { method: 'POST', headers: { 'Content-Length': String(object.ContentLength), 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' }, body, cache: 'no-store', duplex: 'half' } as RequestInit & { duplex: 'half' });
+  if (!uploaded.ok) throw new Error(`Gemini no pudo cargar el video (${uploaded.status}).`);
+  const info = await uploaded.json() as { file?: { name?: string; uri?: string } };
+  if (!info.file?.name || !info.file.uri) throw new Error('Gemini no devolvió referencia del video.');
+  return { fileName: info.file.name, fileUri: info.file.uri, mimeType };
+}
 
 const coachingSchema = {
   type: 'object', properties: {
@@ -61,7 +126,7 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
   const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
         method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
@@ -84,18 +149,23 @@ function val(data: UploadedAnalysisRequest, key: keyof UploadedAnalysisRequest, 
   const value = data[key]; return typeof value === 'string' ? value.trim() : fallback;
 }
 
-async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (status: AnalysisJob['status']) => void): Promise<ReportPayload> {
+async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (status: AnalysisJob['status']) => void | Promise<void>): Promise<ReportPayload> {
   const startedAt = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
-    const fileName = val(data, 'fileName'); const fileUri = val(data, 'fileUri'); const mimeType = val(data, 'mimeType', 'video/mp4');
+    let fileName = val(data, 'fileName'); let fileUri = val(data, 'fileUri'); let mimeType = val(data, 'mimeType', 'video/mp4');
+    if (!fileName || !fileUri) {
+      await updateJob?.('preparing');
+      const uploaded = await uploadS3VideoToGemini(data, apiKey);
+      fileName = uploaded.fileName; fileUri = uploaded.fileUri; mimeType = uploaded.mimeType;
+    }
     if (!fileName || !fileUri) throw new Error('Falta la referencia del video cargado.');
     if (!fileName.startsWith('files/') || !/^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri)) {
       throw new Error('Referencia de video no válida.');
     }
 
     const processingStartedAt = Date.now();
-    updateJob?.('preparing');
+    await updateJob?.('preparing');
     let state = 'PROCESSING';
     const deadline = Date.now() + 8 * 60 * 1000;
     while (state !== 'ACTIVE' && Date.now() < deadline) {
@@ -149,7 +219,7 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
 
     const geminiProcessingMs = Date.now() - processingStartedAt;
     const analysisStartedAt = Date.now();
-    updateJob?.('coaching');
+    await updateJob?.('coaching');
     const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
     const list = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
     const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.filter(x => x && typeof x === 'object').map(x => {
@@ -172,25 +242,47 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
     };
 }
 
+async function claimAndRun(job: AnalysisJob) {
+  if (!activeStatus(job.status) || !tableName) return;
+  const now = Date.now();
+  try {
+    await dynamo.send(new UpdateItemCommand({
+      TableName: tableName, Key: { jobId: { S: job.id } },
+      UpdateExpression: 'SET leaseOwner = :owner, leaseExpiresAt = :lease, updatedAt = :updatedAt',
+      ConditionExpression: '#status IN (:queued, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':owner': { S: workerId }, ':lease': { N: String(now + leaseMs) }, ':updatedAt': { N: String(now) }, ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
+    }));
+  } catch { return; }
+  void completeAnalysis(job.payload, async (status) => updateJob(job.id, status)).then(
+    (report) => updateJob(job.id, 'complete', { report, clearLease: true }),
+    (error) => {
+      console.error('Fight AI uploaded-file async analysis error', error);
+      return updateJob(job.id, 'failed', { error: error instanceof Error ? error.message : 'No se pudo completar el análisis.', clearLease: true });
+    },
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json() as UploadedAnalysisRequest;
-    if (new URL(req.url).searchParams.get('async') === '1') {
-      const id = crypto.randomUUID();
-      const job: AnalysisJob = { id, status: 'preparing', updatedAt: Date.now() };
-      jobs.set(id, job);
-      void completeAnalysis(data, (status) => {
-        job.status = status;
-        job.updatedAt = Date.now();
-      }).then((report) => {
-        job.status = 'complete'; job.report = report; job.updatedAt = Date.now();
-      }).catch((error) => {
-        console.error('Fight AI uploaded-file async analysis error', error);
-        job.status = 'failed'; job.error = error instanceof Error ? error.message : 'No se pudo completar el análisis.'; job.updatedAt = Date.now();
-      });
-      return NextResponse.json({ id, status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    if (new URL(req.url).searchParams.get('async') !== '1') return NextResponse.json(await completeAnalysis(data));
+    if (!tableName) return NextResponse.json({ error: 'La persistencia de análisis aún no está configurada.' }, { status: 503 });
+    const id = typeof (data as { jobId?: unknown }).jobId === 'string' ? (data as { jobId: string }).jobId : crypto.randomUUID();
+    const now = Date.now();
+    const job: AnalysisJob = { id, status: 'queued', updatedAt: now, payload: data, leaseExpiresAt: 0 };
+    try {
+      await dynamo.send(new PutItemCommand({ TableName: tableName, Item: {
+        jobId: { S: id }, status: { S: job.status }, payload: { S: JSON.stringify(data) }, updatedAt: { N: String(now) }, leaseExpiresAt: { N: '0' }, expiresAt: { N: String(Math.floor(now / 1000) + 172800) },
+      }, ConditionExpression: 'attribute_not_exists(jobId)' }));
+    } catch (error) {
+      const existing = await getJob(id);
+      if (!existing) throw error;
+      await claimAndRun(existing);
+      return NextResponse.json({ id, status: existing.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    return NextResponse.json(await completeAnalysis(data));
+    await claimAndRun(job);
+    return NextResponse.json({ id, status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI uploaded-file analysis error', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'No se pudo completar el análisis.' }, { status: 502 });
@@ -199,9 +291,16 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const id = new URL(req.url).searchParams.get('id') || '';
-  const job = jobs.get(id);
-  if (!job) return NextResponse.json({ error: 'El trabajo no está disponible. Puedes reintentar sin volver a subir el video.' }, { status: 404 });
-  if (job.status === 'complete' && job.report) return NextResponse.json({ status: job.status, report: job.report }, { headers: { 'Cache-Control': 'no-store' } });
-  if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error || 'No se pudo completar el análisis.' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
-  return NextResponse.json({ status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+  if (!id) return NextResponse.json({ error: 'Falta el identificador del trabajo.' }, { status: 400 });
+  try {
+    const job = await getJob(id);
+    if (!job) return NextResponse.json({ error: 'El trabajo no está disponible. Puedes reintentar sin volver a subir el video.' }, { status: 404 });
+    if (job.status === 'complete' && job.report) return NextResponse.json({ status: job.status, report: job.report }, { headers: { 'Cache-Control': 'no-store' } });
+    if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error || 'No se pudo completar el análisis.' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
+    await claimAndRun(job);
+    return NextResponse.json({ status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('Fight AI job lookup error', error);
+    return NextResponse.json({ error: 'No se pudo recuperar el trabajo de análisis.' }, { status: 502 });
+  }
 }

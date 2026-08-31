@@ -62,15 +62,14 @@ Codex may inspect workflow/job status, HTTP status, health payloads and sanitize
 
 The web beta is Next.js/React/TypeScript and is deployed through GitHub OIDC to AWS ECR + ALB + ECS Fargate. The browser supports local MP4 preview, automatic non-zero decoded frame selection, visual fighter marking, fighter descriptors, stance/sport/language, coach-focus controls, staged analysis progress, Gemini-backed clinical report generation, Visual Coach teaching aids, reproducible evidence playback, captured evidence frames and printable/PDF diagrams.
 
-Large-video direct-Gemini flow is intentionally split:
+Large-video durable ingestion flow is intentionally split:
 
-1. browser sends raw video bytes to `/api/upload` with content type + size/name headers;
-2. server streams the incoming request body to Gemini resumable upload without `arrayBuffer()` duplication;
-3. browser sends the returned Gemini file reference plus fighter/context fields to `/api/analyze-uploaded`;
-4. browser starts `/api/analyze-uploaded?async=1`; server waits for ACTIVE state and generates the report in a short-lived in-memory job;
-5. browser polls the job endpoint until it receives the final report.
+1. browser uploads 8 MB parts directly to private S3 with signed multipart URLs from `/api/direct-upload`;
+2. browser starts `/api/analyze-uploaded?async=1` with the S3 key and fighter/context fields;
+3. the server persists the job in DynamoDB, conditionally leases it, then streams the private S3 object to Gemini resumable upload;
+4. browser polls the durable job identifier until it receives the final report; an expired lease may be reclaimed after an ECS restart.
 
-This async wrapper exists because CloudFront custom origins have a finite response timeout. It avoids holding a viewer POST open while Gemini reviews a long sparring. It is beta-grade only: jobs do not survive an ECS restart or browser reload, so keep the planned durable queue/job store on the roadmap.
+This avoids the CloudFront custom-origin timeout for the large browser upload and prevents the prior in-memory `El trabajo no está disponible` failure after a deployment. S3 objects and Dynamo jobs have two-day expiry. Before release, the authenticated `fight-ai` profile must apply the bootstrap so the bucket has the required CloudFront CORS configuration and DynamoDB TTL.
 
 For browser-incompatible codecs (notably HEVC Main 10), `/api/preview-frame` creates the selectable JPEG and `/api/evidence-frames` creates one JPEG evidence capture for every report timestamp. The source bytes are staged only on ephemeral task storage and removed after extraction; PDF export stays disabled until those captures are ready, so the print/PDF view retains real video evidence instead of black or fabricated placeholders.
 

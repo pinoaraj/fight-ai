@@ -16,7 +16,9 @@ type Anchor = { x: number; y: number; size: number } | null;
 type AnalysisContext = Record<string, string>;
 type UploadedAnalysisSession = {
   fileName: string;
-  fileUri: string;
+  fileUri?: string;
+  s3Key?: string;
+  jobId?: string;
   mimeType: string;
   context: AnalysisContext;
   timings: PipelineTimings;
@@ -261,13 +263,15 @@ export default function Home() {
   async function requestUploadedAnalysis(session: UploadedAnalysisSession) {
     const started = await fetch('/api/analyze-uploaded?async=1', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...session.context, fileName: session.fileName, fileUri: session.fileUri, mimeType: session.mimeType }),
+      body: JSON.stringify({ ...session.context, fileName: session.fileName, fileUri: session.fileUri, s3Key: session.s3Key, mimeType: session.mimeType, jobId: session.jobId }),
     });
     const startRaw = await started.text();
     let startData: { id?: string; error?: string } | null = null;
     try { startData = startRaw ? JSON.parse(startRaw) : null; } catch { startData = null; }
     if (!started.ok) throw new Error(startData?.error || `No se pudo iniciar el análisis (HTTP ${started.status}).`);
     if (!startData?.id) throw new Error('No se pudo iniciar el trabajo de análisis.');
+    session.jobId = startData.id;
+    setUploadedSession({ ...session });
     for (;;) {
       await new Promise((resolve) => window.setTimeout(resolve, 2500));
       const statusResponse = await fetch(`/api/analyze-uploaded?id=${encodeURIComponent(startData.id)}`, { cache: 'no-store' });
@@ -279,6 +283,28 @@ export default function Home() {
       if (data?.status === 'coaching') setStageFloor(3);
       else setStageFloor(1);
     }
+  }
+
+  async function uploadDirectlyToS3(file: File) {
+    const start = await fetch('/api/direct-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'start', name: file.name, type: file.type || 'video/mp4' }) });
+    const created = await start.json() as { key?: string; uploadId?: string; error?: string };
+    if (!start.ok || !created.key || !created.uploadId) throw new Error(created.error || 'No se pudo iniciar la carga segura.');
+    const chunkSize = 8 * 1024 * 1024;
+    const parts: { ETag: string; PartNumber: number }[] = [];
+    for (let offset = 0, partNumber = 1; offset < file.size; offset += chunkSize, partNumber++) {
+      const sign = await fetch('/api/direct-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'sign', key: created.key, uploadId: created.uploadId, partNumber }) });
+      const signed = await sign.json() as { url?: string; error?: string };
+      if (!sign.ok || !signed.url) throw new Error(signed.error || 'No se pudo preparar una parte del video.');
+      const part = await fetch(signed.url, { method: 'PUT', body: file.slice(offset, Math.min(offset + chunkSize, file.size)), headers: { 'Content-Type': file.type || 'video/mp4' } });
+      const etag = part.headers.get('etag');
+      if (!part.ok || !etag) throw new Error('No se pudo cargar una parte del video.');
+      parts.push({ ETag: etag, PartNumber: partNumber });
+      setStageFloor(Math.max(0, Math.min(1, Math.floor(((offset + chunkSize) / file.size) * 2))));
+    }
+    const complete = await fetch('/api/direct-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'complete', key: created.key, uploadId: created.uploadId, parts }) });
+    const done = await complete.json() as { key?: string; error?: string };
+    if (!complete.ok || !done.key) throw new Error(done.error || 'No se pudo finalizar la carga segura.');
+    return done.key;
   }
 
   async function analyze() {
@@ -306,13 +332,9 @@ export default function Home() {
         response = await fetch('/api/analyze', { method: 'POST', body });
       } else {
         const uploadStarted = performance.now();
-        const uploadedResponse = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4', 'x-fight-ai-name': encodeURIComponent(video.name || 'fight-ai-sparring.mp4'), 'x-fight-ai-size': String(video.size) }, body: video });
-        const uploadedRaw = await uploadedResponse.text();
-        let uploaded: { fileName?: string; fileUri?: string; mimeType?: string; error?: string } | null = null;
-        try { uploaded = uploadedRaw ? JSON.parse(uploadedRaw) : null; } catch { uploaded = null; }
-        if (!uploadedResponse.ok || !uploaded?.fileName || !uploaded.fileUri) throw new Error(uploaded?.error || `La carga del video terminó con HTTP ${uploadedResponse.status}.`);
+        const s3Key = await uploadDirectlyToS3(video);
         const session: UploadedAnalysisSession = {
-          context, fileName: uploaded.fileName, fileUri: uploaded.fileUri, mimeType: uploaded.mimeType || video.type || 'video/mp4',
+          context, fileName: video.name || 'fight-ai-sparring.mp4', s3Key, mimeType: video.type || 'video/mp4',
           timings: { upload_ms: Math.round(performance.now() - uploadStarted), original_size_bytes: video.size, processed_size_bytes: video.size, clip_count: 1 },
         };
         directSession = session;

@@ -121,15 +121,15 @@ The direct Gemini path now requires a higher clinical-coaching standard. Prompt 
 - forbid invented exact punch counts, percentages or unsupported statistics.
 
 ## 7. Video speed / large-file path
-A key user-facing problem is analysis latency on real sparring files. The deployed beta path separates browser upload from the analysis request: the browser streams the video body to `/api/upload`, the server forwards that stream to Gemini's resumable upload endpoint without first materializing a second full `video.arrayBuffer()`, then `/api/analyze-uploaded` analyzes the returned Gemini file reference. This reduces memory pressure/copy overhead and avoids resending the same video bytes with the analysis request.
+A key user-facing problem is analysis latency on real sparring files. The durable path separates the large browser upload from analysis: the browser splits the file into 8 MB chunks and PUTs them directly to the private S3 ingest bucket with short-lived signed URLs. `/api/analyze-uploaded` persists the S3-backed request and the ECS task streams that private object to Gemini. This avoids routing a 275 MB phone video through CloudFront, ALB and ECS as one viewer request.
 
 Gemini file preparation polling allows up to 8 minutes for large files. The UI displays an estimate before starting, elapsed time and progressive stages such as upload/preparation, fighter identification, pattern reading, opponent/strategy analysis and report construction instead of appearing frozen.
 
-For the HTTPS mobile entry point, `/api/analyze-uploaded?async=1` returns a short-lived job ID immediately. The browser treats that initial `{ id, status }` payload as a job descriptor—not as a final report—and polls the same route for `preparing`, `coaching`, `complete` or `failed`, so CloudFront never needs to hold a single long POST response open. The job state is intentionally in-memory for this beta and is not reload-/task-restart-safe; the uploaded Gemini reference is retained in the browser session so the user can retry without re-uploading.
+For the HTTPS mobile entry point, `/api/analyze-uploaded?async=1` returns a durable job ID immediately. The browser treats that initial `{ id, status }` payload as a job descriptor—not as a final report—and polls the same route for `queued`, `preparing`, `coaching`, `complete` or `failed`. DynamoDB stores the payload, status, report and two-day TTL; a conditional worker lease lets a later poll resume an expired job after an ECS restart without a second video upload.
 
 Production verification on 2026-08-29 exercised the browser-equivalent path against the public AWS beta: `/api/health` returned `analysisReady: true` and `geminiConfigured: true`; `/api/upload` returned a valid Gemini file reference; `/api/analyze-uploaded` returned a real Gemini report with `usedInReport: true`, non-empty priorities and four timestamp evidence items. This materially fixes the previous long-video request/memory path for the beta.
 
-This is still not the final durable asynchronous architecture. A future production hardening phase should move ingestion and analysis behind private persistent jobs/queue storage, with resumable client job IDs, retries and progress surviving page reloads or worker restarts. Do not describe the current beta as a fully persistent asynchronous job system.
+Release verification still must exercise the exact HEVC 275 MB Android/CloudFront flow, every JPEG evidence frame and PDF. A future hardening phase can add an independent queue/worker and reload-visible job history; the present DynamoDB lease recovers a job when a browser continues polling after a task restart.
 
 ## 8. Evidence and PDF
 Timestamp evidence must be reproducible against the same uploaded local video. Clicking evidence seeks the preview to the parsed `MM:SS` time and attempts playback after the seek completes.
@@ -160,7 +160,7 @@ Required combined web gate:
 - ALB/ECS deployment
 - `/api/health`
 - real deployed Gemini smoke
-- browser-equivalent `/api/upload` -> `/api/analyze-uploaded` streaming smoke
+- browser-equivalent multipart S3 -> `/api/analyze-uploaded` durable-job smoke
 - provider attribution (`Gemini` + `usedInReport: true`)
 - fighter identity controls
 - coach-focus controls
@@ -239,4 +239,4 @@ The 2026-08-29 web beta upgrade is **materially fixed, validated and deployed fo
 5. deployed application code contains visible-frame fighter anchor selection, HEVC-compatible frames, fighter descriptors, coach-focus controls, staged progress with expected wait guidance, evidence replay/frame capture, PDF image support and visual correction content;
 6. CloudFront HTTPS provisioning is part of the deployment workflow; confirm its generated domain after the first deployment before sharing the public mobile URL.
 
-Remaining work is production hardening rather than a blocker for this beta: the current two-step streaming/reference flow still holds the analysis request open and does not yet provide durable asynchronous background jobs, persisted retry/progress state or reload-safe job IDs.
+The current release candidate replaces the two-step viewer relay with direct multipart S3 and DynamoDB-backed jobs. It is not release-approved until the S3 CORS/TTL bootstrap is applied with an authenticated profile, the ECS deployment is verified, and the exact HEVC Android/CloudFront report and image-bearing PDF journey pass.

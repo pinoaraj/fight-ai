@@ -33,6 +33,7 @@ env:
   ECS_EXECUTION_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIEcsTaskExecutionRole
   ECS_TASK_ROLE_ARN: arn:aws:iam::379549361550:role/FightAIEcsTaskRole
   FIGHT_AI_INGEST_BUCKET: fight-ai-video-ingest-379549361550-sa-east-1
+  FIGHT_AI_JOBS_TABLE: fight-ai-analysis-jobs
   ALB_NAME: fight-ai-web-alb
   TARGET_GROUP_NAME: fight-ai-web-tg
   CLOUDFRONT_COMMENT: fight-ai-web-https
@@ -205,7 +206,7 @@ jobs:
           aws ecs create-cluster --cluster-name "$ECS_CLUSTER" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
           python - <<'PY'
           import json, os
-          td={"family":os.environ["ECS_TASK_FAMILY"],"networkMode":"awsvpc","requiresCompatibilities":["FARGATE"],"cpu":"1024","memory":"3072","executionRoleArn":os.environ["ECS_EXECUTION_ROLE_ARN"],"taskRoleArn":os.environ["ECS_TASK_ROLE_ARN"],"containerDefinitions":[{"name":"fight-ai-web","image":os.environ["IMAGE_SHA"],"essential":True,"portMappings":[{"containerPort":3000,"protocol":"tcp"}],"environment":[{"name":"GEMINI_API_KEY","value":os.environ["GEMINI_API_KEY"]},{"name":"GEMINI_MODEL","value":"gemini-2.5-flash"},{"name":"FIGHT_AI_INGEST_BUCKET","value":os.environ["FIGHT_AI_INGEST_BUCKET"]},{"name":"NODE_OPTIONS","value":"--max-old-space-size=2304"}]}]}
+          td={"family":os.environ["ECS_TASK_FAMILY"],"networkMode":"awsvpc","requiresCompatibilities":["FARGATE"],"cpu":"1024","memory":"3072","executionRoleArn":os.environ["ECS_EXECUTION_ROLE_ARN"],"taskRoleArn":os.environ["ECS_TASK_ROLE_ARN"],"containerDefinitions":[{"name":"fight-ai-web","image":os.environ["IMAGE_SHA"],"essential":True,"portMappings":[{"containerPort":3000,"protocol":"tcp"}],"environment":[{"name":"GEMINI_API_KEY","value":os.environ["GEMINI_API_KEY"]},{"name":"GEMINI_MODEL","value":"gemini-2.5-flash"},{"name":"FIGHT_AI_INGEST_BUCKET","value":os.environ["FIGHT_AI_INGEST_BUCKET"]},{"name":"FIGHT_AI_JOBS_TABLE","value":os.environ["FIGHT_AI_JOBS_TABLE"]},{"name":"NODE_OPTIONS","value":"--max-old-space-size=2304"}]}]}
           with open('/tmp/task-def.json','w',encoding='utf-8') as f: json.dump(td,f)
           PY
           TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file:///tmp/task-def.json --region "$DEPLOY_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
