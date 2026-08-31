@@ -55,9 +55,9 @@ test('real video decodes to a visible selection frame and fighter can be circled
   await expect(page.getByText(/Peleador marcado en/)).toBeVisible();
 });
 
-test('browser uses raw streamed upload then uploaded-file analysis when Gemini is configured directly', async ({ page }) => {
+test('browser uses multipart S3 then a durable uploaded-file analysis job', async ({ page }) => {
   const video = realVideo();
-  let uploadSeen = false;
+  let directUploadSeen = false;
   let uploadedAnalysisSeen = false;
   let multipartAnalyzeSeen = false;
 
@@ -66,28 +66,22 @@ test('browser uses raw streamed upload then uploaded-file analysis when Gemini i
     contentType: 'application/json',
     body: JSON.stringify({ ok: true, backendConfigured: false, geminiConfigured: true, analysisReady: true }),
   }));
-  await page.route('**/api/upload', async route => {
-    const request = route.request();
-    uploadSeen = true;
-    expect(request.method()).toBe('POST');
-    expect(request.headers()['content-type']).toContain('video/mp4');
-    expect(request.headers()['x-fight-ai-name']).toBeTruthy();
-    expect(Number(request.headers()['x-fight-ai-size'])).toBe(video.buffer.length);
-    const body = request.postDataBuffer();
-    expect(body?.length).toBe(video.buffer.length);
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ fileName: 'files/qa-stream-proof', fileUri: 'https://generativelanguage.googleapis.com/v1beta/files/qa-stream-proof', mimeType: 'video/mp4' }),
-    });
+  await page.route('**/api/direct-upload**', async route => {
+    directUploadSeen = true;
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (body.action === 'start') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/qa.mp4', uploadId: 'qa-upload' }) });
+    if (body.action === 'sign') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ url: 'https://upload.invalid/part' }) });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/qa.mp4' }) });
   });
-  await page.route('**/api/analyze-uploaded', async route => {
+  await page.route('https://upload.invalid/**', async route => route.fulfill({ status: 200, headers: { etag: '"qa-part"', 'access-control-allow-origin': '*' } }));
+  await page.route('**/api/analyze-uploaded**', async route => {
     uploadedAnalysisSeen = true;
-    const payload = route.request().postDataJSON() as Record<string, unknown>;
-    expect(payload.fileName).toBe('files/qa-stream-proof');
-    expect(payload.fileUri).toContain('generativelanguage.googleapis.com');
-    expect(payload.glove_color).toBe('rojos');
-    expect(payload.analysis_focus).toContain('technique');
+    if (route.request().method() === 'POST') {
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      expect(payload.s3Key).toBe('uploads/qa.mp4');
+      expect(payload.glove_color).toBe('rojos');
+      return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'qa-job', status: 'queued' }) });
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -107,38 +101,35 @@ test('browser uses raw streamed upload then uploaded-file analysis when Gemini i
   await page.getByTestId('glove-color').fill('rojos');
   await page.getByTestId('analyze-button').click();
   await expect(page.getByText('QA streamed browser path verified.', { exact: true })).toBeVisible({ timeout: 20_000 });
-  expect(uploadSeen).toBe(true);
+  expect(directUploadSeen).toBe(true);
   expect(uploadedAnalysisSeen).toBe(true);
   expect(multipartAnalyzeSeen).toBe(false);
   await expect(page.getByTestId('provider-badge')).toContainText('GEMINI');
   await expect(page.getByTestId('pipeline-timings')).toContainText('Carga');
 });
 
-test('a transient uploaded-file analysis failure retries without uploading the video again', async ({ page }) => {
+test('a transient durable-job failure retries without uploading the video again', async ({ page }) => {
   const video = realVideo();
   let uploadCalls = 0;
   let analysisCalls = 0;
-  let firstPayload: Record<string, unknown> | undefined;
 
   await page.route('**/api/health', route => route.fulfill({
     status: 200, contentType: 'application/json', body: JSON.stringify({ backendConfigured: false, geminiConfigured: true, analysisReady: true }),
   }));
-  await page.route('**/api/upload', async route => {
+  await page.route('**/api/direct-upload**', async route => {
     uploadCalls += 1;
-    await route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify({ fileName: 'files/retry-proof', fileUri: 'https://generativelanguage.googleapis.com/v1beta/files/retry-proof', mimeType: 'video/mp4' }),
-    });
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (body.action === 'start') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/retry.mp4', uploadId: 'retry-upload' }) });
+    if (body.action === 'sign') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ url: 'https://upload.invalid/retry' }) });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/retry.mp4' }) });
   });
-  await page.route('**/api/analyze-uploaded', async route => {
+  await page.route('https://upload.invalid/**', async route => route.fulfill({ status: 200, headers: { etag: '"retry-part"', 'access-control-allow-origin': '*' } }));
+  await page.route('**/api/analyze-uploaded**', async route => {
     analysisCalls += 1;
-    const payload = route.request().postDataJSON() as Record<string, unknown>;
-    if (analysisCalls === 1) {
-      firstPayload = payload;
-      await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'Gemini se está preparando; intenta de nuevo.' }) });
-      return;
+    if (route.request().method() === 'POST') return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'retry-job', status: 'queued' }) });
+    if (analysisCalls === 2) {
+      return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ status: 'failed', error: 'Gemini se está preparando; intenta de nuevo.' }) });
     }
-    expect(payload).toEqual(firstPayload);
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify({
@@ -155,11 +146,11 @@ test('a transient uploaded-file analysis failure retries without uploading the v
   await page.getByTestId('analyze-button').click();
   const retry = page.getByTestId('retry-uploaded-analysis');
   await expect(retry).toBeVisible({ timeout: 20_000 });
-  expect(uploadCalls).toBe(1);
+  expect(uploadCalls).toBe(3);
   await retry.click();
   await expect(page.getByText('Reintento sin segunda carga verificado.', { exact: true })).toBeVisible({ timeout: 20_000 });
-  expect(uploadCalls).toBe(1);
-  expect(analysisCalls).toBe(2);
+  expect(uploadCalls).toBe(3);
+  expect(analysisCalls).toBe(4);
   await expect(retry).toHaveCount(0);
 });
 
