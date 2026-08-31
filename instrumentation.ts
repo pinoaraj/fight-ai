@@ -1,8 +1,4 @@
-/**
- * Runs once when the long-lived Next.js server starts in ECS.
- * Route handlers only enqueue/poll; this process owns durable video jobs.
- */
-export async function register() {
-  await import('./app/api/analyze-uploaded/route');
-  (globalThis as typeof globalThis & { __fightAiStartDurableWorker?: () => void }).__fightAiStartDurableWorker?.();
-}
+// The durable worker is a sibling process started by the container entrypoint.
+// Keeping it outside the request server prevents Next.js from discarding long
+// analyses after the 202 enqueue response has been sent.
+export async function register() {}

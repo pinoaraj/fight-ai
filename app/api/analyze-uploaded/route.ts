@@ -533,7 +533,7 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
     };
 }
 
-async function claimAndRun(job: AnalysisJob) {
+async function claimAndRun(job: AnalysisJob, waitForCompletion = false) {
   if (!activeStatus(job.status) || !tableName) return;
   const now = Date.now();
   try {
@@ -546,7 +546,7 @@ async function claimAndRun(job: AnalysisJob) {
     }));
   } catch { return; }
   const heartbeat = setInterval(() => { void heartbeatJob(job.id); }, 30_000);
-  void completeAnalysis(job.payload, async (status) => updateJob(job.id, status)).then(
+  const execution = completeAnalysis(job.payload, async (status) => updateJob(job.id, status)).then(
     (report) => {
       clearInterval(heartbeat);
       return updateJob(job.id, 'complete', { report, clearLease: true });
@@ -561,6 +561,7 @@ async function claimAndRun(job: AnalysisJob) {
       return updateJob(job.id, 'failed', { error: message, clearLease: true });
     },
   );
+  if (waitForCompletion) await execution;
 }
 
 async function runAnalysisWorker() {
@@ -615,11 +616,8 @@ export async function POST(req: NextRequest) {
       if (retryRequested) {
         try { reusable = await forceRetryIfAbandoned(existing); } catch { reusable = (await getJob(id)) || existing; }
       }
-      // Start immediately as a safe fallback; the boot worker also recovers leases.
-      await claimAndRun(reusable);
       return NextResponse.json({ id, status: reusable.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    await claimAndRun(job);
     return NextResponse.json({ id, status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI uploaded-file analysis error', error);
@@ -628,14 +626,34 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const id = new URL(req.url).searchParams.get('id') || '';
+  const params = new URL(req.url).searchParams;
+  if (params.get('worker') === '1') {
+    try {
+      if (!tableName) return NextResponse.json({ error: 'La persistencia de análisis aún no está configurada.' }, { status: 503 });
+      const now = Date.now();
+      const response = await dynamo.send(new ScanCommand({
+        TableName: tableName,
+        Limit: 8,
+        FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
+      }));
+      const job = (response.Items || []).map(itemToJob).find((candidate): candidate is AnalysisJob => Boolean(candidate));
+      if (!job) return NextResponse.json({ status: 'idle' }, { headers: { 'Cache-Control': 'no-store' } });
+      await claimAndRun(job, true);
+      return NextResponse.json({ status: 'processed', id: job.id }, { headers: { 'Cache-Control': 'no-store' } });
+    } catch (error) {
+      console.error('Fight AI worker request error', error);
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'El worker no pudo procesar el trabajo.' }, { status: 502 });
+    }
+  }
+  const id = params.get('id') || '';
   if (!id) return NextResponse.json({ error: 'Falta el identificador del trabajo.' }, { status: 400 });
   try {
     const job = await getJob(id);
     if (!job) return NextResponse.json({ error: 'El trabajo no está disponible. Puedes reintentar sin volver a subir el video.' }, { status: 404 });
     if (job.status === 'complete' && job.report) return NextResponse.json({ status: job.status, report: job.report }, { headers: { 'Cache-Control': 'no-store' } });
     if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error || 'No se pudo completar el análisis.' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
-    await claimAndRun(job);
     return NextResponse.json({ status: job.status, updatedAt: job.updatedAt }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI job lookup error', error);
