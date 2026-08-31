@@ -75,6 +75,22 @@ For browser-incompatible codecs (notably HEVC Main 10), `/api/preview-frame` cre
 
 When `FIGHT_AI_API_URL` is configured, `/api/analyze` remains the shared-backend adapter. Provider labels are truthful: Gemini is shown only when `usedInReport: true`.
 
+## Checkpoint 2026-08-31 — durable HEVC worker
+
+The previous long-video path was hardened after a real 275 MB HEVC Main10 regression exposed two separate bottlenecks.
+
+Current design:
+- the original private S3 object remains untouched;
+- server preparation uses a direct 0:00–3:00 stream copy with FFmpeg instead of CPU-heavy H.264 transcoding;
+- the UI exposes durable phases: downloading, converting/cutting, uploading to Gemini, preparing and coaching;
+- asynchronous analysis jobs are persisted in DynamoDB with leases;
+- an in-process ECS worker scans DynamoDB every 5 seconds and claims expired/queued work, so analysis no longer depends on the lifetime of the browser HTTP request;
+- deploy/restart recovery must reuse the same S3 object and job id; do not require the athlete to upload the MP4 again.
+
+The Playwright contract was updated on 2026-08-31 to match the durable GET envelope `{ status: "complete", report }` and the current preview status copy. Commit: `3f0421e2a14d0f57a10b92dc3f6046ae8a4073b5`.
+
+Do not reintroduce full HEVC transcoding as the default preparation path. If direct stream copy proves incompatible with a specific source, fail with an explicit preparation error or add a narrowly-scoped fallback instead of silently waiting for many minutes.
+
 ## Web regression gate
 
 Keep these green before merging/releasing:
