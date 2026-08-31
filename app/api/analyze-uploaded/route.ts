@@ -899,6 +899,27 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const params = new URL(req.url).searchParams;
+  const workerJobId = params.get('workerJob');
+  const workerOwner = params.get('workerOwner');
+  if (workerJobId && workerOwner) {
+    try {
+      const job = await getJob(workerJobId);
+      const stored = await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { jobId: { S: workerJobId } }, ConsistentRead: true }));
+      if (!job || stored.Item?.leaseOwner?.S !== workerOwner) return NextResponse.json({ error: 'El lease pertenece a otro worker.' }, { status: 409 });
+      try {
+        const report = await completeAnalysis(job.payload, async (status) => updateJob(job.id, status));
+        await updateJob(job.id, 'complete', { report, clearLease: true });
+        return NextResponse.json({ status: 'complete', id: job.id });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'No se pudo completar el análisis.';
+        if (message.startsWith('GEMINI_BUSY:')) await deferProviderRetry(job.id, 'coaching', message.replace(/^GEMINI_BUSY:/, ''), 45_000);
+        else await updateJob(job.id, 'failed', { error: message, clearLease: true });
+        return NextResponse.json({ status: 'failed', error: message }, { status: 502 });
+      }
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'El worker no pudo ejecutar el trabajo.' }, { status: 502 });
+    }
+  }
   if (params.get('worker') === '1') {
     try {
       if (!tableName) return NextResponse.json({ error: 'La persistencia de análisis aún no está configurada.' }, { status: 503 });
