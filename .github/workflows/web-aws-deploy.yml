@@ -6,6 +6,7 @@ on:
     branches: [web/mvp]
     paths:
       - '.github/workflows/web-aws-deploy.yml'
+      - '.github/workflows/web-streaming-smoke.yml'
       - 'Dockerfile'
       - '.dockerignore'
       - 'package.json'
