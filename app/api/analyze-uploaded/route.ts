@@ -107,6 +107,23 @@ async function heartbeatJob(id: string) {
   }
 }
 
+async function deferProviderRetry(id: string, status: AnalysisJob['status'], message: string, delayMs = 45_000) {
+  if (!tableName) return;
+  const now = Date.now();
+  await dynamo.send(new UpdateItemCommand({
+    TableName: tableName,
+    Key: { jobId: { S: id } },
+    UpdateExpression: 'SET #status = :status, updatedAt = :updatedAt, leaseExpiresAt = :lease, error = :error REMOVE leaseOwner',
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: {
+      ':status': { S: status },
+      ':updatedAt': { N: String(now) },
+      ':lease': { N: String(now + delayMs) },
+      ':error': { S: message.slice(0, 1200) },
+    },
+  }));
+}
+
 async function forceRetryIfAbandoned(job: AnalysisJob) {
   if (!tableName || !activeStatus(job.status)) return job;
   const now = Date.now();
@@ -345,15 +362,25 @@ function interactionOutputText(raw: unknown) {
 
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, externalUrl = false) {
   const configured = process.env.GEMINI_MODEL?.trim();
-  const candidates = externalUrl ? ['gemini-2.5-flash'] : Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash'].filter(Boolean)));
+  const candidates = externalUrl
+    ? ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+    : Array.from(new Set([configured || '', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.6-flash'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
-    for (let attempt = 0; attempt < (externalUrl ? 2 : 5); attempt++) {
-      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-        method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
-        signal: AbortSignal.timeout(externalUrl ? 4 * 60 * 1000 : 8 * 60 * 1000),
-      });
+    const maxAttempts = externalUrl ? 2 : 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
+          signal: AbortSignal.timeout(externalUrl ? 4 * 60 * 1000 : 8 * 60 * 1000),
+        });
+      } catch {
+        lastStatus = 0;
+        if (attempt + 1 < maxAttempts) { await sleep(5000 * (attempt + 1)); continue; }
+        break;
+      }
       lastStatus = response.status; retryAfter = Number(response.headers.get('retry-after') || 0);
       const body = await response.text();
       if (response.ok) {
@@ -361,11 +388,17 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
         if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
         return cleanGeminiJson(text);
       }
-      if ((response.status === 429 || response.status === 503) && attempt + 1 < (externalUrl ? 2 : 5)) { await sleep(Math.max(retryAfter * 1000, 6000 * (attempt + 1))); continue; }
+      if ((response.status === 429 || response.status === 503) && attempt + 1 < maxAttempts) {
+        await sleep(Math.max(retryAfter * 1000, 5000 * (attempt + 1)));
+        continue;
+      }
       break;
     }
   }
-  throw new Error(lastStatus === 429 ? 'Gemini está temporalmente ocupado. Conservamos tu video: reintenta en 60 segundos sin volver a subirlo.' : `Gemini rechazó el análisis (${lastStatus || 'sin estado'}).`);
+  if (lastStatus === 429 || lastStatus === 503 || lastStatus === 0) {
+    throw new Error('GEMINI_BUSY:Gemini está temporalmente ocupado. El job seguirá intentando automáticamente sin volver a subir el video.');
+  }
+  throw new Error(`Gemini rechazó el análisis (${lastStatus}).`);
 }
 
 function val(data: UploadedAnalysisRequest, key: keyof UploadedAnalysisRequest, fallback = '') {
@@ -514,7 +547,11 @@ async function claimAndRun(job: AnalysisJob) {
     (report) => updateJob(job.id, 'complete', { report, clearLease: true }),
     (error) => {
       console.error('Fight AI uploaded-file async analysis error', error);
-      return updateJob(job.id, 'failed', { error: error instanceof Error ? error.message : 'No se pudo completar el análisis.', clearLease: true });
+      const message = error instanceof Error ? error.message : 'No se pudo completar el análisis.';
+      if (message.startsWith('GEMINI_BUSY:')) {
+        return deferProviderRetry(job.id, 'coaching', message.replace(/^GEMINI_BUSY:/, ''), 45_000);
+      }
+      return updateJob(job.id, 'failed', { error: message, clearLease: true });
     },
   ).finally(() => clearInterval(heartbeat));
 }
