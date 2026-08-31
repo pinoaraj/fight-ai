@@ -14,6 +14,7 @@ export async function GET() {
       backendConfigured,
       geminiConfigured,
       analysisReady: backendConfigured || geminiConfigured,
+      buildSha: process.env.FIGHT_AI_BUILD_SHA || 'unknown',
       providerAttributionPolicy: 'usedInReport-required',
     },
     {
