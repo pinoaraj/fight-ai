@@ -12,6 +12,7 @@ on:
       - 'package.json'
       - 'tsconfig.json'
       - 'instrumentation.ts'
+      - 'scripts/**'
       - 'app/**'
       - 'infra/aws/**'
 
