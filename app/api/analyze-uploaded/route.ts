@@ -586,14 +586,14 @@ async function runAnalysisWorker() {
   }
 }
 
-function startAnalysisWorker() {
+function startDurableAnalysisWorker() {
   if (workerStarted || !tableName) return;
   workerStarted = true;
   void runAnalysisWorker();
   setInterval(() => { void runAnalysisWorker(); }, 5000);
 }
 
-startAnalysisWorker();
+(globalThis as typeof globalThis & { __fightAiStartDurableWorker?: () => void }).__fightAiStartDurableWorker = startDurableAnalysisWorker;
 
 export async function POST(req: NextRequest) {
   try {
@@ -617,10 +617,10 @@ export async function POST(req: NextRequest) {
       }
       // The durable worker, not this HTTP response, owns long-running Gemini work.
       // Returning here keeps mobile/network disconnects from suspending the job.
-      startAnalysisWorker();
+      startDurableAnalysisWorker();
       return NextResponse.json({ id, status: reusable.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    startAnalysisWorker();
+    startDurableAnalysisWorker();
     return NextResponse.json({ id, status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI uploaded-file analysis error', error);
@@ -636,7 +636,7 @@ export async function GET(req: NextRequest) {
     if (!job) return NextResponse.json({ error: 'El trabajo no está disponible. Puedes reintentar sin volver a subir el video.' }, { status: 404 });
     if (job.status === 'complete' && job.report) return NextResponse.json({ status: job.status, report: job.report }, { headers: { 'Cache-Control': 'no-store' } });
     if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error || 'No se pudo completar el análisis.' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
-    startAnalysisWorker();
+    startDurableAnalysisWorker();
     return NextResponse.json({ status: job.status, updatedAt: job.updatedAt }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI job lookup error', error);
