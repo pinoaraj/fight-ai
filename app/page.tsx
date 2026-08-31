@@ -319,9 +319,22 @@ export default function Home() {
       const sign = await fetch('/api/direct-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'sign', key: created.key, uploadId: created.uploadId, partNumber }) });
       const signed = await sign.json() as { url?: string; error?: string };
       if (!sign.ok || !signed.url) throw new Error(signed.error || 'No se pudo preparar una parte del video.');
-      const part = await fetch(signed.url, { method: 'PUT', body: file.slice(offset, Math.min(offset + chunkSize, file.size)), headers: { 'Content-Type': file.type || 'video/mp4' } });
-      const etag = part.headers.get('etag');
-      if (!part.ok || !etag) throw new Error('No se pudo cargar una parte del video.');
+      const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
+      let etag = '';
+      try {
+        const part = await fetch(signed.url, { method: 'PUT', body: chunk, headers: { 'Content-Type': file.type || 'video/mp4' } });
+        etag = part.ok ? (part.headers.get('etag') || '') : '';
+      } catch {
+        etag = '';
+      }
+      if (!etag) {
+        const proxy = await fetch(`/api/direct-upload?proxy=1&key=${encodeURIComponent(created.key)}&uploadId=${encodeURIComponent(created.uploadId)}&partNumber=${partNumber}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: chunk,
+        });
+        const proxied = await proxy.json() as { ETag?: string; error?: string };
+        if (!proxy.ok || !proxied.ETag) throw new Error(proxied.error || `No se pudo cargar la parte ${partNumber} del video.`);
+        etag = proxied.ETag;
+      }
       parts.push({ ETag: etag, PartNumber: partNumber });
       setStageFloor(Math.max(0, Math.min(1, Math.floor(((offset + chunkSize) / file.size) * 2))));
     }
@@ -371,7 +384,12 @@ export default function Home() {
       }
       const data = await parseResponse(response); setStageFloor(5); setReport(data); setUploadedSession(null);
       window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
-    } catch (e) { setError(e instanceof Error ? e.message : 'Error inesperado.'); }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Error inesperado.';
+      setError(message === 'Failed to fetch'
+        ? 'La conexión se interrumpió durante la carga. Fight AI intentó recuperar la subida; vuelve a pulsar ANALIZAR si tu conexión ya está estable.'
+        : message);
+    }
     finally { setBusy(false); }
   }
 
