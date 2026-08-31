@@ -571,7 +571,6 @@ async function runAnalysisWorker() {
     const now = Date.now();
     const response = await dynamo.send(new ScanCommand({
       TableName: tableName,
-      Limit: 8,
       FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: { ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
@@ -633,7 +632,6 @@ export async function GET(req: NextRequest) {
       const now = Date.now();
       const response = await dynamo.send(new ScanCommand({
         TableName: tableName,
-        Limit: 8,
         FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
         ExpressionAttributeNames: { '#status': 'status' },
         ExpressionAttributeValues: { ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
