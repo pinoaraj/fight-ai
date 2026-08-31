@@ -235,7 +235,10 @@ async function prepareSignedSegments(data: UploadedAnalysisRequest, updateJob?: 
     const clip = await stat(clipPath);
     if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
 
-    const targetBytes = 55 * 1024 * 1024;
+    // Keep a three-minute HEVC round in one Gemini batch whenever possible.
+    // 55 MB made a 275 MB round become five segments (two serial batches),
+    // which is why otherwise healthy mobile jobs exceeded nine minutes.
+    const targetBytes = 90 * 1024 * 1024;
     const maxBytes = 95 * 1024 * 1024;
     const count = Math.max(1, Math.min(8, Math.ceil(clip.size / targetBytes)));
     if (clip.size / count > maxBytes) throw new Error('El video supera la ruta rápida sin recodificar.');
