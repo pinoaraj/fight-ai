@@ -40,7 +40,7 @@ test('real video decodes to a visible selection frame and fighter can be circled
   await page.getByTestId('video-input').setInputFiles(realVideo());
   const preview = page.getByTestId('video-preview');
   await expect(preview).toBeVisible();
-  await expect(page.getByTestId('preview-status')).toContainText('FRAME VISIBLE LISTO', { timeout: 15_000 });
+  await expect(page.getByTestId('preview-status')).toContainText('AHORA MARCA A TU PELEADOR', { timeout: 15_000 });
   const media = await preview.evaluate((node: HTMLVideoElement) => ({ readyState: node.readyState, width: node.videoWidth, height: node.videoHeight, time: node.currentTime }));
   expect(media.readyState).toBeGreaterThanOrEqual(2);
   expect(media.width).toBeGreaterThan(0);
@@ -86,11 +86,14 @@ test('browser uses multipart S3 then a durable uploaded-file analysis job', asyn
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        mode: 'real', provider: 'Gemini', usedInReport: true,
-        summary: 'QA streamed browser path verified.',
-        strengths: ['Presión útil con jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'],
-        drills: ['Step-jab + pivote · 3×2 min'],
-        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base antes del golpe' }],
+        status: 'complete',
+        report: {
+          mode: 'real', provider: 'Gemini', usedInReport: true,
+          summary: 'QA streamed browser path verified.',
+          strengths: ['Presión útil con jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'],
+          drills: ['Step-jab + pivote · 3×2 min'],
+          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base antes del golpe' }],
+        },
       }),
     });
   });
@@ -133,9 +136,12 @@ test('a transient durable-job failure retries without uploading the video again'
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify({
-        mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Reintento sin segunda carga verificado.',
-        strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
-        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base' }],
+        status: 'complete',
+        report: {
+          mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Reintento sin segunda carga verificado.',
+          strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
+          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base' }],
+        },
       }),
     });
   });
