@@ -382,7 +382,7 @@ async function uploadLocalSegmentToGemini(apiKey: string, path: string, displayN
     cache: 'no-store',
     signal: AbortSignal.timeout(45_000),
   });
-  if (!start.ok) throw new Error(\`Gemini no pudo iniciar un segmento (\${start.status}).\`);
+  if (!start.ok) throw new Error(`Gemini no pudo iniciar un segmento (${start.status}).`);
   const uploadUrl = start.headers.get('x-goog-upload-url');
   if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga para un segmento.');
 
@@ -399,7 +399,7 @@ async function uploadLocalSegmentToGemini(apiKey: string, path: string, displayN
     signal: AbortSignal.timeout(4 * 60 * 1000),
     duplex: 'half',
   } as RequestInit & { duplex: 'half' });
-  if (!uploaded.ok) throw new Error(\`Gemini no pudo cargar un segmento (\${uploaded.status}).\`);
+  if (!uploaded.ok) throw new Error(`Gemini no pudo cargar un segmento (${uploaded.status}).`);
   const info = await uploaded.json() as { file?: { name?: string; uri?: string; state?: string } };
   const fileName = info.file?.name || '';
   const fileUri = info.file?.uri || '';
@@ -411,12 +411,12 @@ async function waitGeminiFileActive(apiKey: string, fileName: string, initialSta
   let state = initialState;
   const deadline = Date.now() + 3 * 60 * 1000;
   while (state !== 'ACTIVE' && Date.now() < deadline) {
-    const response = await fetch(\`https://generativelanguage.googleapis.com/v1beta/\${fileName}\`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}`, {
       headers: { 'x-goog-api-key': apiKey },
       cache: 'no-store',
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) throw new Error(\`No se pudo consultar un segmento en Gemini (\${response.status}).\`);
+    if (!response.ok) throw new Error(`No se pudo consultar un segmento en Gemini (${response.status}).`);
     state = (await response.json() as { state?: string }).state || 'PROCESSING';
     if (state === 'FAILED') throw new Error('Gemini no pudo preparar un segmento.');
     if (state !== 'ACTIVE') await sleep(1500);
@@ -475,7 +475,7 @@ async function prepareGeminiSegments(
       const ref = await uploadLocalSegmentToGemini(
         apiKey,
         segment.path,
-        \`round-part-\${index + 1}-\${val(data, 'fileName', key)}\`,
+        `round-part-${index + 1}-${val(data, 'fileName', key)}`,
         segment.size,
       );
       return { ...ref, offset: segment.offset, duration: segment.duration, size: segment.size };
