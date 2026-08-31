@@ -126,14 +126,13 @@ export default function Home() {
   const reportRef = useRef<HTMLElement>(null);
   const videoUrl = useMemo(() => (video ? URL.createObjectURL(video) : ''), [video]);
   const reportVideoSrc = report?.mode === 'demo' ? '/api/demo-video' : videoUrl;
-  const elapsedStage = elapsed < 20 ? 0 : elapsed < 70 ? 1 : elapsed < 115 ? 2 : elapsed < 165 ? 3 : elapsed < 220 ? 4 : 5;
-  const processingStep = Math.min(processingSteps.length - 1, Math.max(stageFloor, elapsedStage));
+  const processingStep = Math.min(processingSteps.length - 1, stageFloor);
   const elapsedLabel = elapsed < 60 ? `${elapsed}s transcurridos` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s transcurridos`;
-  const waitGuidance = elapsed < 120
-    ? 'Un sparring de 3 minutos suele requerir entre 2 y 5 minutos en total.'
-    : elapsed < 300
-      ? 'Seguimos trabajando. Los videos HEVC o de mayor duración pueden tardar algunos minutos más.'
-      : 'El análisis sigue activo. No necesitas volver a subir el video; puedes mantener esta pestaña abierta.';
+  const waitGuidance = elapsed < 300
+    ? 'Un round de 3 minutos suele tardar 2–8 minutos. Los HEVC grandes pueden tardar más mientras Gemini prepara el video.'
+    : elapsed < 600
+      ? 'El trabajo sigue activo en el servidor. La fase mostrada es la fase real del job; no necesitas volver a subir el video.'
+      : 'Está tardando más de lo normal. Fight AI conservará el job y podrás reintentarlo sin volver a subir el video.';
   const identityReady = Boolean(anchor || gloveColor || topColor || fighterNotes.trim());
   const workflowStep = report || busy ? 5 : !video ? 1 : !anchor ? 2 : !identityReady ? 3 : 4;
   const nextPrompts = ['SUBE TU VIDEO', 'MARCA AL PELEADOR', 'CONFIRMA SUS RASGOS', 'ELIGE EL FOCO DEL COACH', 'REVISA TU REPORTE'];
@@ -297,15 +296,23 @@ export default function Home() {
         continue;
       }
       const raw = await statusResponse.text();
-      let data: { status?: string; report?: Report; error?: string } | null = null;
+      let data: { status?: string; report?: Report; error?: string; updatedAt?: number } | null = null;
       try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
       if (data?.status === 'complete' && data.report) return data.report;
       if (data?.status === 'failed' || !statusResponse.ok && statusResponse.status !== 202) throw new Error(data?.error || 'No se pudo completar el análisis.');
       if (data?.status === 'downloading') setStageFloor(0);
       else if (data?.status === 'converting') setStageFloor(1);
       else if (data?.status === 'uploading' || data?.status === 'preparing') setStageFloor(2);
-      else if (data?.status === 'coaching') setStageFloor(3);
+      else if (data?.status === 'coaching') setStageFloor(4);
       else setStageFloor(1);
+
+      const jobAgeMs = typeof data?.updatedAt === 'number' ? Date.now() - data.updatedAt : 0;
+      if (data?.status === 'preparing' && jobAgeMs > 9 * 60 * 1000) {
+        throw new Error('Gemini está tardando demasiado en preparar este video. El job quedó guardado: usa REINTENTAR ANÁLISIS para continuar sin volver a subirlo.');
+      }
+      if (data?.status && data.status !== 'preparing' && jobAgeMs > 6 * 60 * 1000) {
+        throw new Error('Esta fase lleva demasiado tiempo sin avanzar. El job quedó guardado: usa REINTENTAR ANÁLISIS para recuperarlo sin volver a subir el video.');
+      }
     }
   }
 
