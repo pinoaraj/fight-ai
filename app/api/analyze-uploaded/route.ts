@@ -366,7 +366,7 @@ export async function GET(req: NextRequest) {
     if (job.status === 'complete' && job.report) return NextResponse.json({ status: job.status, report: job.report }, { headers: { 'Cache-Control': 'no-store' } });
     if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error || 'No se pudo completar el análisis.' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
     await claimAndRun(job);
-    return NextResponse.json({ status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ status: job.status, updatedAt: job.updatedAt }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI job lookup error', error);
     return NextResponse.json({ error: 'No se pudo recuperar el trabajo de análisis.' }, { status: 502 });
