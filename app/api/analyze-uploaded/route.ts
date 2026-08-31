@@ -615,12 +615,11 @@ export async function POST(req: NextRequest) {
       if (retryRequested) {
         try { reusable = await forceRetryIfAbandoned(existing); } catch { reusable = (await getJob(id)) || existing; }
       }
-      // The durable worker, not this HTTP response, owns long-running Gemini work.
-      // Returning here keeps mobile/network disconnects from suspending the job.
-      startDurableAnalysisWorker();
+      // Start immediately as a safe fallback; the boot worker also recovers leases.
+      await claimAndRun(reusable);
       return NextResponse.json({ id, status: reusable.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
-    startDurableAnalysisWorker();
+    await claimAndRun(job);
     return NextResponse.json({ id, status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI uploaded-file analysis error', error);
@@ -636,7 +635,7 @@ export async function GET(req: NextRequest) {
     if (!job) return NextResponse.json({ error: 'El trabajo no está disponible. Puedes reintentar sin volver a subir el video.' }, { status: 404 });
     if (job.status === 'complete' && job.report) return NextResponse.json({ status: job.status, report: job.report }, { headers: { 'Cache-Control': 'no-store' } });
     if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error || 'No se pudo completar el análisis.' }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
-    startDurableAnalysisWorker();
+    await claimAndRun(job);
     return NextResponse.json({ status: job.status, updatedAt: job.updatedAt }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Fight AI job lookup error', error);
