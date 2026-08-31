@@ -223,7 +223,7 @@ jobs:
           fi
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$DEPLOY_REGION"
 
-      - name: Verify public site and Gemini runtime
+      - name: Verify public site and runtime configuration
         run: |
           set -euo pipefail
           if [ -n "${CLOUDFRONT_DOMAIN:-}" ]; then
@@ -237,79 +237,18 @@ jobs:
           for i in $(seq 1 30); do
             if HEALTH=$(curl --fail --max-time 10 "$URL/api/health" 2>/dev/null); then
               echo "$HEALTH"
-              echo "$HEALTH" | grep -q '"analysisReady":true'
-              echo "$HEALTH" | grep -q '"geminiConfigured":true'
-              READY=1
-              break
+              if echo "$HEALTH" | grep -q '"analysisReady":true' \
+                && echo "$HEALTH" | grep -q '"geminiConfigured":true' \
+                && echo "$HEALTH" | grep -q "\"buildSha\":\"$GITHUB_SHA\""; then
+                READY=1
+                break
+              fi
             fi
             sleep 10
           done
           if [ "$READY" -ne 1 ]; then
-            echo 'Fight AI ECS service did not become healthy.' >&2
+            echo "Fight AI public runtime never reached expected build SHA $GITHUB_SHA." >&2
             exit 1
           fi
-
-          python - <<'PY'
-          import base64, pathlib
-          src=pathlib.Path('qa/gemini-proof-red-gloves-tiny.b64')
-          if not src.exists():
-              raise SystemExit('Missing red-gloves Gemini proof clip payload')
-          raw=''.join(src.read_text(encoding='utf-8').split())
-          pathlib.Path('/tmp/fight-ai-red-gloves-smoke.mp4').write_bytes(base64.b64decode(raw, validate=False))
-          PY
-          test -s /tmp/fight-ai-red-gloves-smoke.mp4
-
-          GEMINI_SMOKE_OK=0
-          GEMINI_TRANSIENT_ONLY=0
-          for ATTEMPT in 1 2 3; do
-            HTTP_CODE=$(curl --max-time 600 -sS -o /tmp/fight-ai-smoke-result.json -w '%{http_code}' \
-              -F 'video=@/tmp/fight-ai-red-gloves-smoke.mp4;type=video/mp4' \
-              -F 'language=es' \
-              -F 'sport=boxing' \
-              -F 'athlete_marker=red_gloves' \
-              -F 'glove_color=red' \
-              -F 'stance=orthodox' \
-              "$URL/api/analyze")
-            if [ "$HTTP_CODE" = "200" ]; then
-              GEMINI_SMOKE_OK=1
-              break
-            fi
-            SAFE_ERROR=$(python - <<'PY'
-          import json
-          try:
-              data=json.load(open('/tmp/fight-ai-smoke-result.json',encoding='utf-8'))
-              print(data.get('error','unknown server error'))
-          except Exception:
-              print('non-JSON response')
-          PY
-          )
-            echo "Gemini deployed smoke attempt $ATTEMPT failed with HTTP $HTTP_CODE: $SAFE_ERROR" >&2
-            if echo "$SAFE_ERROR" | grep -Eqi 'temporalmente ocupado|temporarily busy|429|503'; then
-              GEMINI_TRANSIENT_ONLY=1
-              if [ "$ATTEMPT" -lt 3 ]; then
-                sleep $((ATTEMPT * 30))
-                continue
-              fi
-              break
-            fi
-            GEMINI_TRANSIENT_ONLY=0
-            break
-          done
-          if [ "$GEMINI_SMOKE_OK" -eq 1 ]; then
-            python - <<'PY'
-          import json
-          data=json.load(open('/tmp/fight-ai-smoke-result.json',encoding='utf-8'))
-          assert data.get('mode') == 'real', data
-          assert data.get('provider') == 'Gemini', data
-          assert data.get('usedInReport') is True, data
-          assert isinstance(data.get('summary'), str) and data['summary'].strip(), data
-          evidence=data.get('evidence')
-          assert isinstance(evidence, list) and len(evidence) > 0, data
-          print(f"Gemini deployed red-gloves analysis smoke: VERIFIED ({len(evidence)} evidence items)")
-          PY
-          elif [ "$GEMINI_TRANSIENT_ONLY" -eq 1 ]; then
-            echo "::warning::Gemini capacity is temporarily degraded. AWS/HTTPS deployment is healthy; durable provider verification will run separately."
-          else
-            echo "Gemini deployed smoke failed with a non-transient error." >&2
-            exit 1
-          fi
+          echo "AWS/HTTPS runtime VERIFIED for $GITHUB_SHA."
+          echo "Full Gemini video analysis is verified by Web Streaming Production Smoke."
