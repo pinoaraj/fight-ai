@@ -121,7 +121,7 @@ The direct Gemini path now requires a higher clinical-coaching standard. Prompt 
 - forbid invented exact punch counts, percentages or unsupported statistics.
 
 ## 7. Video speed / large-file path
-A key user-facing problem is analysis latency on real sparring files. The durable path separates the large browser upload from analysis: the browser splits the file into 8 MB chunks and PUTs them directly to the private S3 ingest bucket with short-lived signed URLs. `/api/analyze-uploaded` persists the S3-backed request and the ECS task streams that private object to Gemini. This avoids routing a 275 MB phone video through CloudFront, ALB and ECS as one viewer request.
+A key user-facing problem is analysis latency on real sparring files. The durable path separates the large browser upload from analysis: the browser splits the file into 8 MB chunks and PUTs them directly to the private S3 ingest bucket with short-lived signed URLs. `/api/analyze-uploaded` persists the S3-backed request; ECS downloads it privately, normalizes the first `0:00–3:00` to H.264/AAC, and only then uploads that clip to Gemini. This avoids routing a 275 MB phone video through CloudFront, ALB and ECS as one viewer request and makes HEVC phone footage suitable for analysis.
 
 Gemini file preparation polling allows up to 8 minutes for large files. The UI displays an estimate before starting, elapsed time and progressive stages such as upload/preparation, fighter identification, pattern reading, opponent/strategy analysis and report construction instead of appearing frozen.
 

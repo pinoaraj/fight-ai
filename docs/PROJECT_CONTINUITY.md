@@ -20,6 +20,7 @@ Do not restart either client or invent a second report schema. Keep Android and 
 3. A report credits Gemini only with `provider: "Gemini"` and `usedInReport: true`.
 4. HEVC/Main10 or another browser-incompatible codec uses server-side FFmpeg JPEG captures for fighter selection and evidence. It must never require the athlete to select a fighter from a black video surface.
 5. PDF download remains disabled until every report timestamp has a real evidence image. The report and PDF must never substitute black boxes or fabricated images for evidence.
+6. Fight AI accepts one round per request. The product states “hasta 3 minutos”; ECS normalizes the private S3 original to H.264/AAC from `0:00–3:00` before Gemini sees it. Do not move that cut to the phone because HEVC/Main10 devices cannot reliably decode or export it.
 
 ## Handoff status — 2026-08-29
 
