@@ -46,8 +46,8 @@ const demo: Report = {
 
 const processingSteps = [
   { title: 'Subiendo video de forma segura', detail: 'Estamos enviando el archivo una sola vez. Mantén esta pestaña abierta.', typical: 'Suele tomar 15–60 s' },
-  { title: 'Preparando video para IA', detail: 'Gemini está convirtiendo el video en una referencia lista para revisar.', typical: 'Suele tomar 30–90 s' },
-  { title: 'Confirmando al peleador marcado', detail: 'Usamos tu marca, guantes y rasgos para mantener la misma identidad.', typical: 'En curso' },
+  { title: 'Convirtiendo el round para IA', detail: 'Creamos una copia ligera y compatible de hasta 3 minutos; tu original permanece intacto.', typical: 'Suele tomar 1–3 min' },
+  { title: 'Preparando la referencia en Gemini', detail: 'Ya enviamos el round compacto; Gemini confirma el video antes de revisarlo.', typical: 'Suele tomar 30–90 s' },
   { title: 'Leyendo patrones técnicos', detail: 'El coach revisa distancia, defensa, base, salidas y decisiones repetidas.', typical: 'En curso' },
   { title: 'Analizando rival y estrategia', detail: 'Estamos conectando los momentos visibles con correcciones concretas.', typical: 'En curso' },
   { title: 'Construyendo tu reporte', detail: 'Ordenamos prioridades, drills, evidencia y las capturas para PDF.', typical: 'Último paso' },
@@ -301,7 +301,10 @@ export default function Home() {
       try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
       if (data?.status === 'complete' && data.report) return data.report;
       if (data?.status === 'failed' || !statusResponse.ok && statusResponse.status !== 202) throw new Error(data?.error || 'No se pudo completar el análisis.');
-      if (data?.status === 'coaching') setStageFloor(3);
+      if (data?.status === 'downloading') setStageFloor(0);
+      else if (data?.status === 'converting') setStageFloor(1);
+      else if (data?.status === 'uploading' || data?.status === 'preparing') setStageFloor(2);
+      else if (data?.status === 'coaching') setStageFloor(3);
       else setStageFloor(1);
     }
   }

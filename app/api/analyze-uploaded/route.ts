@@ -28,7 +28,7 @@ type ReportPayload = {
   timings: { preprocessing_ms: number; gemini_processing_ms: number; analysis_ms: number; total_ms: number; clip_count: number };
 };
 type AnalysisJob = {
-  id: string; status: 'queued' | 'preparing' | 'coaching' | 'complete' | 'failed'; updatedAt: number;
+  id: string; status: 'queued' | 'downloading' | 'converting' | 'uploading' | 'preparing' | 'coaching' | 'complete' | 'failed'; updatedAt: number;
   payload: UploadedAnalysisRequest; report?: ReportPayload; error?: string; leaseExpiresAt?: number;
 };
 const region = process.env.AWS_REGION || 'sa-east-1';
@@ -40,7 +40,7 @@ const leaseMs = 12 * 60 * 1000;
 const workerId = crypto.randomUUID();
 
 function activeStatus(status: AnalysisJob['status']) {
-  return status === 'queued' || status === 'preparing' || status === 'coaching';
+  return status === 'queued' || status === 'downloading' || status === 'converting' || status === 'uploading' || status === 'preparing' || status === 'coaching';
 }
 
 function itemToJob(item: Record<string, AttributeValue> | undefined): AnalysisJob | null {
@@ -79,9 +79,9 @@ async function updateJob(id: string, status: AnalysisJob['status'], extra: { rep
 
 function makeThreeMinuteClip(inputPath: string, outputPath: string) {
   return new Promise<void>((resolve, reject) => {
-    const encoder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180', '-map', '0:v:0?', '-map', '0:a?', '-vf', "scale='min(1280,iw)':-2", '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-threads', '2', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', outputPath], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const encoder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180', '-map', '0:v:0?', '-map', '0:a?', '-vf', "scale='min(854,iw)':-2,fps=15", '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '27', '-threads', '2', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', outputPath], { stdio: ['ignore', 'ignore', 'pipe'] });
     const errors: Buffer[] = [];
-    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('El recorte del round tardó demasiado.')); }, 12 * 60 * 1000);
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('El recorte del round tardó demasiado.')); }, 5 * 60 * 1000);
     encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
     encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible para preparar el round.')); });
     encoder.on('close', (code) => {
@@ -92,7 +92,7 @@ function makeThreeMinuteClip(inputPath: string, outputPath: string) {
   });
 }
 
-async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: string) {
+async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: string, updateJob?: (status: AnalysisJob['status']) => void | Promise<void>) {
   const key = val(data, 's3Key');
   if (!key || !key.startsWith('uploads/') || !bucket) throw new Error('Referencia de video no válida.');
   const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -100,11 +100,14 @@ async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: stri
   const inputPath = join(tmpdir(), `fight-ai-source-${crypto.randomUUID()}.mp4`);
   const clipPath = join(tmpdir(), `fight-ai-round-${crypto.randomUUID()}.mp4`);
   try {
+    await updateJob?.('downloading');
     await pipeline(object.Body as Readable, createWriteStream(inputPath, { flags: 'wx' }));
+    await updateJob?.('converting');
     await makeThreeMinuteClip(inputPath, clipPath);
     const clip = await stat(clipPath);
     if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
     const mimeType = 'video/mp4';
+    await updateJob?.('uploading');
     const start = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
       method: 'POST', headers: { 'x-goog-api-key': apiKey, 'X-Goog-Upload-Protocol': 'resumable', 'X-Goog-Upload-Command': 'start', 'X-Goog-Upload-Header-Content-Length': String(clip.size), 'X-Goog-Upload-Header-Content-Type': mimeType, 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: { display_name: `round-3min-${val(data, 'fileName', key).slice(0, 160)}` } }), cache: 'no-store',
@@ -187,7 +190,7 @@ async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (stat
     let fileName = val(data, 'fileName'); let fileUri = val(data, 'fileUri'); let mimeType = val(data, 'mimeType', 'video/mp4');
     if (!fileName || !fileUri) {
       await updateJob?.('preparing');
-      const uploaded = await uploadS3VideoToGemini(data, apiKey);
+      const uploaded = await uploadS3VideoToGemini(data, apiKey, updateJob);
       fileName = uploaded.fileName; fileUri = uploaded.fileUri; mimeType = uploaded.mimeType;
     }
     if (!fileName || !fileUri) throw new Error('Falta la referencia del video cargado.');
@@ -280,9 +283,9 @@ async function claimAndRun(job: AnalysisJob) {
     await dynamo.send(new UpdateItemCommand({
       TableName: tableName, Key: { jobId: { S: job.id } },
       UpdateExpression: 'SET leaseOwner = :owner, leaseExpiresAt = :lease, updatedAt = :updatedAt',
-      ConditionExpression: '#status IN (:queued, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
+      ConditionExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
       ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':owner': { S: workerId }, ':lease': { N: String(now + leaseMs) }, ':updatedAt': { N: String(now) }, ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
+      ExpressionAttributeValues: { ':owner': { S: workerId }, ':lease': { N: String(now + leaseMs) }, ':updatedAt': { N: String(now) }, ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
     }));
   } catch { return; }
   void completeAnalysis(job.payload, async (status) => updateJob(job.id, status)).then(
