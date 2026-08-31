@@ -95,25 +95,40 @@ function interactionOutputText(raw: unknown) {
 
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string) {
   const configured = process.env.GEMINI_MODEL?.trim();
-  const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash'].filter(Boolean)));
+  const candidates = Array.from(new Set([configured || '', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.6-flash'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-        method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
-      });
+    const maxAttempts = 2;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
+          signal: AbortSignal.timeout(4 * 60 * 1000),
+        });
+      } catch {
+        lastStatus = 0;
+        if (attempt + 1 < maxAttempts) { await sleep(5000); continue; }
+        break;
+      }
       lastStatus = response.status; retryAfter = Number(response.headers.get('retry-after') || 0); const body = await response.text();
       if (response.ok) {
         const text = interactionOutputText(JSON.parse(body) as unknown);
         if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
         return cleanGeminiJson(text);
       }
-      if ((response.status === 429 || response.status === 503) && attempt < 4) { await sleep(Math.max(retryAfter * 1000, 8000 * (attempt + 1))); continue; }
+      if ((response.status === 429 || response.status === 503) && attempt + 1 < maxAttempts) {
+        await sleep(Math.max(retryAfter * 1000, 5000 * (attempt + 1)));
+        continue;
+      }
       break;
     }
   }
-  throw new Error(lastStatus === 429 ? 'Gemini está temporalmente ocupado. Conservamos tu video: reintenta en 60 segundos sin volver a subirlo.' : `Gemini rechazó el análisis (${lastStatus || 'sin estado'}).`);
+  if (lastStatus === 429 || lastStatus === 503 || lastStatus === 0) {
+    throw new Error('Gemini está temporalmente ocupado. El video sigue seguro; vuelve a intentar el análisis en un momento.');
+  }
+  throw new Error(`Gemini rechazó el análisis (${lastStatus}).`);
 }
 
 function field(source: FormData, key: string, fallback = '') { return String(source.get(key) || fallback).trim(); }
