@@ -446,11 +446,11 @@ async function prepareGeminiSegments(
     const clip = await stat(clipPath);
     if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
 
-    // Smaller Gemini Files prepare much faster than one large HEVC upload.
-    // Keep <=45 MB when possible and prepare all pieces concurrently.
-    const targetBytes = 42 * 1024 * 1024;
-    const maxBytes = 48 * 1024 * 1024;
-    const count = Math.max(1, Math.min(10, Math.ceil(clip.size / targetBytes)));
+    // Keep HEVC pieces short/small so Gemini Files can prepare them in parallel.
+    // Around 28 MB keeps a typical 3-minute mobile round to <=10 pieces.
+    const targetBytes = 28 * 1024 * 1024;
+    const maxBytes = 34 * 1024 * 1024;
+    const count = Math.max(1, Math.min(12, Math.ceil(clip.size / targetBytes)));
     if (clip.size / count > maxBytes) throw new Error('El video supera la ruta segmentada sin recodificar.');
 
     const duration = 180 / count;
@@ -471,7 +471,7 @@ async function prepareGeminiSegments(
     }
 
     await updateJob?.('uploading');
-    const uploaded = await mapWithConcurrency(local, 3, async (segment, index) => {
+    const uploaded = await mapWithConcurrency(local, 4, async (segment, index) => {
       const ref = await uploadLocalSegmentToGemini(
         apiKey,
         segment.path,
@@ -482,7 +482,7 @@ async function prepareGeminiSegments(
     });
 
     await updateJob?.('preparing');
-    await mapWithConcurrency(uploaded, 5, async (segment) => {
+    await mapWithConcurrency(uploaded, 8, async (segment) => {
       await waitGeminiFileActive(apiKey, segment.fileName, segment.state);
       return true;
     });
@@ -685,41 +685,36 @@ async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (stat
     let fileName = val(data, 'fileName'); let fileUri = val(data, 'fileUri'); let mimeType = val(data, 'mimeType', 'video/mp4');
     if (!fileName || !fileUri) {
       const preprocessingStartedAt = Date.now();
-      const prepared = await prepareInlineSegments(data, updateJob);
+      const segments = await prepareGeminiSegments(data, apiKey, updateJob);
       const preprocessingMs = Date.now() - preprocessingStartedAt;
-      if (!prepared.segments.length) {
-        await prepared.cleanup();
-        throw new Error('No se pudo preparar el round para análisis rápido.');
-      }
+      if (!segments.length) throw new Error('No se pudo preparar el round para análisis rápido.');
 
-      try {
-        await updateJob?.('coaching');
-        const analysisStartedAt = Date.now();
-        const parts = await mapWithConcurrency(prepared.segments, 3, async (segment, index) =>
-          generateCoachJsonInline(
-            apiKey,
-            buildSegmentPrompt(data, index, prepared.segments.length, segment.offset, segment.duration),
-            segment.path,
-          )
-        );
-        const merged = mergeSegmentReports(parts, prepared.segments.map(segment => segment.offset));
-        const analysisMs = Date.now() - analysisStartedAt;
-        return {
-          mode: 'real', provider: 'Gemini', usedInReport: true,
-          summary: merged.summary || 'Análisis completado con Gemini.',
-          strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
-          plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
-          timings: {
-            preprocessing_ms: preprocessingMs,
-            gemini_processing_ms: analysisMs,
-            analysis_ms: analysisMs,
-            total_ms: Date.now() - startedAt,
-            clip_count: prepared.segments.length,
-          },
-        };
-      } finally {
-        await prepared.cleanup();
-      }
+      await updateJob?.('coaching');
+      const analysisStartedAt = Date.now();
+      const parts = await mapWithConcurrency(segments, 5, async (segment, index) =>
+        generateCoachJson(
+          apiKey,
+          buildSegmentPrompt(data, index, segments.length, segment.offset, segment.duration),
+          segment.fileUri,
+          'video/mp4',
+          false,
+        )
+      );
+      const merged = mergeSegmentReports(parts, segments.map(segment => segment.offset));
+      const analysisMs = Date.now() - analysisStartedAt;
+      return {
+        mode: 'real', provider: 'Gemini', usedInReport: true,
+        summary: merged.summary || 'Análisis completado con Gemini.',
+        strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
+        plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
+        timings: {
+          preprocessing_ms: preprocessingMs,
+          gemini_processing_ms: analysisMs,
+          analysis_ms: analysisMs,
+          total_ms: Date.now() - startedAt,
+          clip_count: segments.length,
+        },
+      };
     }
     if (!fileName || !fileUri) throw new Error('Falta la referencia del video cargado.');
     if (!fileName.startsWith('files/') || !/^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri)) {
