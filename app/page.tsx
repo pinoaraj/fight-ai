@@ -108,6 +108,7 @@ export default function Home() {
   const [previewAttempting, setPreviewAttempting] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const [fallbackFrameUrl, setFallbackFrameUrl] = useState('');
+  const [selectionFrameUrl, setSelectionFrameUrl] = useState('');
   const [previewTime, setPreviewTime] = useState(0);
   const [focuses, setFocuses] = useState<string[]>(['technique','weaknesses','strategy']);
   const [customFocus, setCustomFocus] = useState('');
@@ -174,7 +175,7 @@ export default function Home() {
 
   function selectVideo(file: File | null) {
     if (fallbackFrameUrl) URL.revokeObjectURL(fallbackFrameUrl);
-    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewAttempting(false); setPreviewError(''); setFallbackFrameUrl(''); setPreviewTime(0); setError(''); setReplayStatus(''); setUploadedSession(null);
+    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewAttempting(false); setPreviewError(''); setFallbackFrameUrl(''); setSelectionFrameUrl(''); setPreviewTime(0); setError(''); setReplayStatus(''); setUploadedSession(null);
   }
   function showDemo() { setFrames({}); setReport(demo); window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
   function toggleFocus(id: string) { setFocuses(x => x.includes(id) ? x.filter(v => v !== id) : [...x, id]); }
@@ -238,8 +239,19 @@ export default function Home() {
   }
   async function toggleMarking() {
     const node = videoRef.current;
+    if (marking) {
+      setMarking(false);
+      if (!anchor) setSelectionFrameUrl('');
+      return;
+    }
     if (node && !(previewReady || await decodePreview(node, true))) return;
-    setMarking(x => !x);
+    if (node && node.videoWidth && node.videoHeight) {
+      const canvas = document.createElement('canvas');
+      canvas.width = node.videoWidth; canvas.height = node.videoHeight;
+      canvas.getContext('2d')?.drawImage(node, 0, 0);
+      setSelectionFrameUrl(canvas.toDataURL('image/jpeg', .9));
+    }
+    setMarking(true);
   }
   function setAnchorFromEvent(e: React.MouseEvent<HTMLDivElement>) {
     const r = e.currentTarget.getBoundingClientRect();
@@ -274,7 +286,14 @@ export default function Home() {
     setUploadedSession({ ...session });
     for (;;) {
       await new Promise((resolve) => window.setTimeout(resolve, 2500));
-      const statusResponse = await fetch(`/api/analyze-uploaded?id=${encodeURIComponent(startData.id)}`, { cache: 'no-store' });
+      let statusResponse: Response;
+      try {
+        statusResponse = await fetch(`/api/analyze-uploaded?id=${encodeURIComponent(startData.id)}`, { cache: 'no-store' });
+      } catch {
+        // An ECS deploy or temporary mobile handoff must not discard the durable job.
+        setStageFloor(1);
+        continue;
+      }
       const raw = await statusResponse.text();
       let data: { status?: string; report?: Report; error?: string } | null = null;
       try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
@@ -381,9 +400,9 @@ export default function Home() {
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Selecciona y revisa tu sparring" />
       <input data-testid="video-input" ref={inputRef} hidden type="file" accept="video/*" onChange={e => selectVideo(e.target.files?.[0] || null)} />
-      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="dropKicker">PASO 1 · COMIENZA AQUÍ</span><span className="uploadIcon">↑</span><strong>SUBE EL VIDEO DE TU SPARRING</strong><span className="dropCopy">Arrastra tu video aquí o selecciónalo desde tu teléfono</span><small>MP4, MOV o formato compatible</small><span className="dropAction">ELEGIR VIDEO <b>→</b></span></button> : <div className="videoWrap"><div className="videoTask"><span>PASO 2 · IDENTIFICA A TU ATLETA</span><b>{previewReady?'Frame listo para marcar':'Preparando un frame verificable'}</b></div><div className={`videoStage ${marking?'isMarking':''}`}>{fallbackFrameUrl ? <img data-testid="compatible-frame" className="compatibleFrame" src={fallbackFrameUrl} alt="Frame compatible para marcar al peleador"/> : <video data-testid="video-preview" ref={videoRef} src={videoUrl} controls={!marking} playsInline muted preload="auto" onLoadedMetadata={e=>void decodePreview(e.currentTarget)}/>} {anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" data-testid="marker-overlay" onClick={setAnchorFromEvent}><span>Haz clic sobre el centro del peleador</span></div>}</div><div className="previewHint" data-testid="preview-status"><b>{previewReady?'FRAME VISIBLE LISTO':previewAttempting?'PREPARANDO FRAME COMPATIBLE…':'FRAME NO DISPONIBLE'}</b><span>{previewReady?'Busca el momento más claro con la barra y luego marca al atleta.':previewError}</span>{!previewReady && <button data-testid="decode-frame" onClick={()=>void generateCompatibleFrame()} disabled={previewAttempting}>{previewAttempting?'GENERANDO FRAME…':'REINTENTAR FRAME COMPATIBLE'}</button>}</div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
+      {!video ? <button className="drop" data-testid="upload-button" onClick={() => inputRef.current?.click()}><span className="dropKicker">PASO 1 · COMIENZA AQUÍ</span><span className="uploadIcon">↑</span><strong>SUBE EL VIDEO DE TU SPARRING</strong><span className="dropCopy">Arrastra tu video aquí o selecciónalo desde tu teléfono</span><small>MP4, MOV o formato compatible</small><span className="dropAction">ELEGIR VIDEO <b>→</b></span></button> : <div className="videoWrap"><div className="videoTask"><span>PASO 2 · IDENTIFICA A TU ATLETA</span><b>{previewReady?'Frame listo para marcar':'Preparando un frame verificable'}</b></div><div className={`videoStage ${marking?'isMarking':''}`}>{fallbackFrameUrl || selectionFrameUrl ? <img data-testid="compatible-frame" className="compatibleFrame" src={fallbackFrameUrl || selectionFrameUrl} alt="Frame fijo para marcar al peleador"/> : <video data-testid="video-preview" ref={videoRef} src={videoUrl} controls playsInline muted preload="auto" onLoadedMetadata={e=>void decodePreview(e.currentTarget)}/>} {anchor && <div className="fighterCircle" style={{left:`${anchor.x}%`,top:`${anchor.y}%`,width:`${anchor.size}%`,aspectRatio:'1'}}/>}{marking && <div className="markerOverlay" data-testid="marker-overlay" onClick={setAnchorFromEvent}><span>Toca el centro del peleador</span></div>}</div><div className="previewHint" data-testid="preview-status"><b>{previewReady?'FRAME VISIBLE LISTO':previewAttempting?'PREPARANDO FRAME COMPATIBLE…':'FRAME NO DISPONIBLE'}</b><span>{previewReady?'Pulsa “Marcar peleador”: aparecerá una imagen fija sin controles para tocar al atleta.':previewError}</span>{!previewReady && <button data-testid="decode-frame" onClick={()=>void generateCompatibleFrame()} disabled={previewAttempting}>{previewAttempting?'GENERANDO FRAME…':'REINTENTAR FRAME COMPATIBLE'}</button>}</div><div className="fileRow"><div><b>{video.name}</b><span>{(video.size/1024/1024).toFixed(1)} MB</span></div><button onClick={() => inputRef.current?.click()}>Cambiar</button></div>{replayStatus && <div className="replayStatus">▶ {replayStatus}</div>}</div>}
       <div id="fighter-identity"><SectionTitle n="02" title="SELECCIONA AL PELEADOR" subtitle="Pulsa marcar sobre el frame o elige una característica para continuar" extraClass="fighterTitle" />
-      <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video} onClick={toggleMarking}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>setAnchor(null)}>Limpiar</button>}</div>
+      <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video} onClick={toggleMarking}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>{ setAnchor(null); setSelectionFrameUrl(''); }}>Limpiar</button>}</div>
       {anchor && <><div className="anchorConfirmed">✓ Peleador marcado en {Math.floor(previewTime/60)}:{String(Math.floor(previewTime%60)).padStart(2,'0')}</div><label className="rangeLabel">Tamaño del círculo<input type="range" min="12" max="48" value={anchor.size} onChange={e=>setAnchor({...anchor,size:Number(e.target.value)})}/></label></>}
       <SectionTitle n="03" title="CARACTERÍSTICAS" subtitle="Una sola pista basta si no puedes marcar el frame" extraClass="optionsTitle" />
       <div className="identityQuick" aria-label="Características rápidas"><span>ELIGE A TU ATLETA:</span>{['Guantes rojos','Guantes azules','Guantes negros'].map((color)=><button type="button" key={color} className={gloveColor===color.replace('Guantes ','').toLowerCase()?'active':''} onClick={()=>{ setGloveColor(color.replace('Guantes ','').toLowerCase()); setError(''); }}>{color}</button>)}</div>
