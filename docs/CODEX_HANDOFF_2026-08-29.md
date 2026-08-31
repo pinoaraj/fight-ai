@@ -69,7 +69,7 @@ Large-video durable ingestion flow is intentionally split:
 3. the server persists the job in DynamoDB, conditionally leases it, then streams the private S3 object to Gemini resumable upload;
 4. browser polls the durable job identifier until it receives the final report; an expired lease may be reclaimed after an ECS restart.
 
-This avoids the CloudFront custom-origin timeout for the large browser upload and prevents the prior in-memory `El trabajo no está disponible` failure after a deployment. S3 objects and Dynamo jobs have two-day expiry. Before release, the authenticated `fight-ai` profile must apply the bootstrap so the bucket has the required CloudFront CORS configuration and DynamoDB TTL.
+This avoids the CloudFront custom-origin timeout for the large browser upload and prevents the prior in-memory `El trabajo no está disponible` failure after a deployment. S3 objects and Dynamo jobs have two-day expiry. On 2026-08-31 the CloudFront CORS preflight was verified with HTTP 200 and exposed `ETag`; DynamoDB TTL `expiresAt` is enabled. The durable lease was also verified by allowing a HEVC job lease to expire and observing the same job be reclaimed without re-upload.
 
 For browser-incompatible codecs (notably HEVC Main 10), `/api/preview-frame` creates the selectable JPEG and `/api/evidence-frames` creates one JPEG evidence capture for every report timestamp. The source bytes are staged only on ephemeral task storage and removed after extraction; PDF export stays disabled until those captures are ready, so the print/PDF view retains real video evidence instead of black or fabricated placeholders.
 
