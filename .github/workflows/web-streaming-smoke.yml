@@ -2,25 +2,23 @@ name: Web Streaming Production Smoke
 
 on:
   workflow_dispatch:
-  push:
+  workflow_run:
+    workflows: ["Web AWS Deploy"]
+    types: [completed]
     branches: [web/mvp]
-    paths:
-      - '.github/workflows/web-streaming-smoke.yml'
-      - 'app/api/direct-upload/**'
-      - 'app/api/analyze-uploaded/**'
-      - 'app/page.tsx'
 
 permissions:
   contents: read
 
 jobs:
   streaming-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: web/mvp
+          ref: ${{ github.event.workflow_run.head_sha || 'web/mvp' }}
 
       - name: Verify public multipart S3 and durable Gemini analysis
         run: |
