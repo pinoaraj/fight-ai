@@ -91,6 +91,10 @@ The current upgraded web flow contains:
 - browser PDF/print export including evidence images;
 - responsive mobile layout.
 
+### Guided workflow rule
+
+The step strip must behave as a concise visual coach, not passive navigation. It pulses exactly one pending action at a time and advances in this order: **Subir video → Seleccionar peleador → Características → Foco del coach → Analizar sparring**. After submission it becomes the live report/progress state. Completed steps remain visibly checked; future steps do not pulse.
+
 ### Product acceptance criteria
 Web is not release-ready unless:
 - the local video actually decodes to a visible non-zero frame before visual fighter marking is enabled;

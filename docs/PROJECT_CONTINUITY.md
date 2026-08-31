@@ -25,6 +25,7 @@ Do not restart either client or create a second analysis schema.
 7. Gemini is credited only when `provider: "Gemini"` and `usedInReport: true`.
 8. HEVC/browser-incompatible preview/evidence uses real server-extracted JPEGs. PDF remains blocked until real evidence images are ready.
 9. Original upload remains private and intact; a deploy/restart must reuse the same S3 object/job instead of requesting a second upload.
+10. The workflow strip is an ordered guide: pulse only the next required action — **Subir video → Seleccionar peleador → Características → Foco del coach → Analizar sparring** — then switch to report progress.
 
 ## Verified beta gate — 2026-08-31
 

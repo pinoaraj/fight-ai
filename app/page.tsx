@@ -111,6 +111,7 @@ export default function Home() {
   const [selectionFrameUrl, setSelectionFrameUrl] = useState('');
   const [previewTime, setPreviewTime] = useState(0);
   const [focuses, setFocuses] = useState<string[]>(['technique','weaknesses','strategy']);
+  const [focusConfirmed, setFocusConfirmed] = useState(false);
   const [customFocus, setCustomFocus] = useState('');
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
@@ -133,9 +134,10 @@ export default function Home() {
     : elapsed < 600
       ? 'El trabajo sigue activo en el servidor. La fase mostrada es la fase real del job; no necesitas volver a subir el video.'
       : 'Está tardando más de lo normal. Fight AI conservará el job y podrás reintentarlo sin volver a subir el video.';
-  const identityReady = Boolean(anchor || gloveColor || topColor || fighterNotes.trim());
-  const workflowStep = report || busy ? 5 : !video ? 1 : !anchor ? 2 : !identityReady ? 3 : 4;
-  const nextPrompts = ['SUBE TU VIDEO', 'MARCA AL PELEADOR', 'CONFIRMA SUS RASGOS', 'ELIGE EL FOCO DEL COACH', 'REVISA TU REPORTE'];
+  const identityReady = Boolean(gloveColor || topColor || fighterNotes.trim() || relativeHeight || build);
+  const workflowStep = report || busy ? 5 : !video ? 1 : !anchor ? 2 : !identityReady ? 3 : !focusConfirmed ? 4 : 5;
+  const nextPrompts = ['SUBE TU VIDEO', 'MARCA AL PELEADOR', 'CONFIRMA SUS RASGOS', 'ELIGE EL FOCO DEL COACH', report ? 'REVISA TU REPORTE' : busy ? 'ANALIZANDO…' : 'ANALIZA TU SPARRING'];
+  const workflowLabels = ['Subir video', 'Seleccionar peleador', 'Características', 'Foco del coach', report || busy ? 'Reporte' : 'Analizar sparring'];
 
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
   useEffect(() => { void fetch('/api/health', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(setServiceHealth).catch(() => setServiceHealth({})); }, []);
@@ -175,11 +177,11 @@ export default function Home() {
 
   function selectVideo(file: File | null) {
     if (fallbackFrameUrl) URL.revokeObjectURL(fallbackFrameUrl);
-    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewAttempting(false); setPreviewError(''); setFallbackFrameUrl(''); setSelectionFrameUrl(''); setPreviewTime(0); setError(''); setReplayStatus(''); setUploadedSession(null);
+    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewAttempting(false); setPreviewError(''); setFallbackFrameUrl(''); setSelectionFrameUrl(''); setPreviewTime(0); setError(''); setReplayStatus(''); setUploadedSession(null); setFocusConfirmed(false);
     if (file) window.setTimeout(() => document.getElementById('fighter-step')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 180);
   }
   function showDemo() { setFrames({}); setReport(demo); window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
-  function toggleFocus(id: string) { setFocuses(x => x.includes(id) ? x.filter(v => v !== id) : [...x, id]); }
+  function toggleFocus(id: string) { setFocusConfirmed(true); setFocuses(x => x.includes(id) ? x.filter(v => v !== id) : [...x, id]); }
   async function requestCompatibleFrame() {
     if (!video) return false;
     const target = videoRef.current ? frameTarget(videoRef.current) : 2;
@@ -426,7 +428,7 @@ export default function Home() {
   return <main>
     <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO GEMINI…' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
     <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>Tu video se usa sólo para este análisis.</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
-    <section className="workflowStrip" aria-label="Progreso del análisis" aria-live="polite">{['Video','Marcar peleador','Características','Foco del coach','Reporte'].map((label,index)=>{ const current=workflowStep===index+1; return <span key={label} className={`${current?'active nextPulse':workflowStep>index+1?'done':''}`}><i>{workflowStep>index+1?'✓':index+1}</i><b>{label}</b>{current && <small>{nextPrompts[index]}</small>}</span>; })}</section>
+    <section className="workflowStrip" aria-label="Progreso del análisis" aria-live="polite">{workflowLabels.map((label,index)=>{ const current=workflowStep===index+1; return <span key={label} className={`${current?'active nextPulse':workflowStep>index+1?'done':''}`}><i>{workflowStep>index+1?'✓':index+1}</i><b>{label}</b>{current && <small>{nextPrompts[index]}</small>}</span>; })}</section>
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Rounds de hasta 3 minutos" />
       <input data-testid="video-input" ref={inputRef} hidden type="file" accept="video/*" onChange={e => selectVideo(e.target.files?.[0] || null)} />
@@ -439,7 +441,7 @@ export default function Home() {
       <div className="identityGrid"><label>Color de guantes<input data-testid="glove-color" value={gloveColor} onChange={e=>setGloveColor(e.target.value)} placeholder="Ej. rojos"/></label><label>Ropa / polera<input value={topColor} onChange={e=>setTopColor(e.target.value)} placeholder="Ej. polera negra"/></label><label>Altura relativa<select value={relativeHeight} onChange={e=>setRelativeHeight(e.target.value)}><option value="">No sé</option><option value="shorter">Más bajo</option><option value="similar">Similar</option><option value="taller">Más alto</option></select></label><label>Contextura<select value={build} onChange={e=>setBuild(e.target.value)}><option value="">No sé</option><option value="slim">Delgada</option><option value="medium">Media / atlética</option><option value="stocky">Robusta</option></select></label><label className="wide">Otras características<textarea data-testid="fighter-notes" value={fighterNotes} onChange={e=>setFighterNotes(e.target.value)} placeholder="Ej. más bajo, pelo corto, shorts negros, protector rojo…"/></label></div></div>
       <SectionTitle n="04" title="FOCO DEL COACH" subtitle="Dile qué quieres que priorice" extraClass="optionsTitle" />
       <div className="focusGrid">{focusOptions.map(([id,label])=><button data-testid={`focus-${id}`} key={id} className={focuses.includes(id)?'active':''} onClick={()=>toggleFocus(id)}>{focuses.includes(id)?'✓ ':''}{label}</button>)}</div>
-      <label className="customFocus">Objetivo personalizado<textarea value={customFocus} onChange={e=>setCustomFocus(e.target.value)} placeholder="Ej. quiero saber por qué me conectan al entrar, cómo cerrar mejor la distancia y qué estrategia usar contra este rival."/></label>
+      <label className="customFocus">Objetivo personalizado<textarea value={customFocus} onChange={e=>{ setFocusConfirmed(true); setCustomFocus(e.target.value); }} placeholder="Ej. quiero saber por qué me conectan al entrar, cómo cerrar mejor la distancia y qué estrategia usar contra este rival."/></label>
       <SectionTitle n="05" title="CONFIGURACIÓN" subtitle="Contexto del análisis" extraClass="optionsTitle" />
       <div className="analysisOptions"><label>Disciplina<select data-testid="sport-select" value={sport} onChange={e=>setSport(e.target.value as 'boxing'|'kickboxing')}><option value="boxing">Boxeo</option><option value="kickboxing">Kickboxing</option></select></label><label>Guardia<select data-testid="stance-select" value={stance} onChange={e=>setStance(e.target.value as 'orthodox'|'southpaw'|'switch')}><option value="orthodox">Ortodoxa</option><option value="southpaw">Zurda</option><option value="switch">Switch</option></select></label><label>Idioma<select value={language} onChange={e=>setLanguage(e.target.value as 'es'|'en')}><option value="es">Español</option><option value="en">English</option></select></label></div>
       <div className="analysisTiming"><b>TIEMPO ESTIMADO</b><span>Analizamos un máximo de 3:00 desde el inicio del round. Si el video es más largo, el resto no se usa. Un round de 3 min suele tardar 2–5 min.</span></div>
