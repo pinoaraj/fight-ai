@@ -2,7 +2,7 @@ import { AttributeValue, DynamoDBClient, GetItemCommand, PutItemCommand, ScanCom
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { stat, unlink } from 'node:fs/promises';
+import { readFile, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -511,6 +511,127 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
   return results;
 }
 
+
+type InlineSegment = { path: string; offset: number; duration: number; size: number };
+
+async function prepareInlineSegments(
+  data: UploadedAnalysisRequest,
+  updateJob?: (status: AnalysisJob['status']) => void | Promise<void>,
+) {
+  const key = val(data, 's3Key');
+  if (!key || !key.startsWith('uploads/') || !bucket) throw new Error('Referencia de video no válida.');
+  const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!object.Body || !object.ContentLength) throw new Error('No se pudo recuperar el video cargado.');
+
+  const inputPath = join(tmpdir(), 'fight-ai-inline-source-' + crypto.randomUUID() + '.mp4');
+  const clipPath = join(tmpdir(), 'fight-ai-inline-round-' + crypto.randomUUID() + '.mp4');
+  const segmentPaths: string[] = [];
+  await updateJob?.('downloading');
+  await pipeline(object.Body as Readable, createWriteStream(inputPath, { flags: 'wx' }));
+
+  try {
+    await updateJob?.('converting');
+    await makeThreeMinuteClip(inputPath, clipPath);
+    const clip = await stat(clipPath);
+    if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
+
+    // Inline video input is ideal for one-off clips below 100 MB.
+    // Keep raw pieces around 48 MB so base64 + JSON stays comfortably below that limit.
+    const targetBytes = 48 * 1024 * 1024;
+    const maxBytes = 56 * 1024 * 1024;
+    const count = Math.max(1, Math.min(10, Math.ceil(clip.size / targetBytes)));
+    if (clip.size / count > maxBytes) throw new Error('El video supera la ruta inline sin recodificar.');
+
+    const duration = 180 / count;
+    const segments: InlineSegment[] = [];
+    if (count === 1) {
+      segments.push({ path: clipPath, offset: 0, duration: 180, size: clip.size });
+    } else {
+      for (let i = 0; i < count; i++) {
+        const offset = i * duration;
+        const pieceDuration = Math.min(duration, 180 - offset);
+        const path = join(tmpdir(), 'fight-ai-inline-part-' + crypto.randomUUID() + '.mp4');
+        segmentPaths.push(path);
+        await makeClipRange(clipPath, path, offset, pieceDuration);
+        const info = await stat(path);
+        if (!info.size || info.size > maxBytes) throw new Error('Un segmento inline sigue siendo demasiado pesado.');
+        segments.push({ path, offset, duration: pieceDuration, size: info.size });
+      }
+    }
+    return {
+      segments,
+      cleanup: async () => {
+        await Promise.all([
+          unlink(inputPath).catch(() => undefined),
+          unlink(clipPath).catch(() => undefined),
+          ...segmentPaths.map(path => unlink(path).catch(() => undefined)),
+        ]);
+      },
+    };
+  } catch (error) {
+    await Promise.all([
+      unlink(inputPath).catch(() => undefined),
+      unlink(clipPath).catch(() => undefined),
+      ...segmentPaths.map(path => unlink(path).catch(() => undefined)),
+    ]);
+    throw error;
+  }
+}
+
+async function generateCoachJsonInline(apiKey: string, prompt: string, path: string) {
+  const encoded = (await readFile(path)).toString('base64');
+  const configured = process.env.GEMINI_MODEL?.trim();
+  const candidates = Array.from(new Set([
+    configured || '',
+    'gemini-3.7-flash',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+  ].filter(Boolean)));
+
+  let lastStatus = 0;
+  for (const model of candidates) {
+    let response: Response;
+    try {
+      response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+        method: 'POST',
+        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          input: [
+            { type: 'video', data: encoded, mime_type: 'video/mp4' },
+            { type: 'text', text: prompt },
+          ],
+          response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
+          store: false,
+        }),
+        cache: 'no-store',
+        signal: AbortSignal.timeout(90_000),
+      });
+    } catch {
+      lastStatus = 0;
+      continue;
+    }
+
+    lastStatus = response.status;
+    const body = await response.text();
+    if (response.ok) {
+      const text = interactionOutputText(JSON.parse(body) as unknown);
+      if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
+      return cleanGeminiJson(text);
+    }
+    if (response.status === 429 || response.status === 503 || response.status === 404) {
+      await sleep(1500);
+      continue;
+    }
+    break;
+  }
+
+  if (lastStatus === 429 || lastStatus === 503 || lastStatus === 404 || lastStatus === 0) {
+    throw new Error('GEMINI_BUSY:Gemini no respondió a tiempo. El job seguirá intentando automáticamente sin volver a subir el video.');
+  }
+  throw new Error(`Gemini rechazó el análisis inline (${lastStatus}).`);
+}
+
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, externalUrl = false) {
   const configured = process.env.GEMINI_MODEL?.trim();
   const isGeminiFile = /^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri);
@@ -564,36 +685,41 @@ async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (stat
     let fileName = val(data, 'fileName'); let fileUri = val(data, 'fileUri'); let mimeType = val(data, 'mimeType', 'video/mp4');
     if (!fileName || !fileUri) {
       const preprocessingStartedAt = Date.now();
-      const segments = await prepareGeminiSegments(data, apiKey, updateJob);
+      const prepared = await prepareInlineSegments(data, updateJob);
       const preprocessingMs = Date.now() - preprocessingStartedAt;
-      if (!segments.length) throw new Error('No se pudo preparar el round para análisis rápido.');
+      if (!prepared.segments.length) {
+        await prepared.cleanup();
+        throw new Error('No se pudo preparar el round para análisis rápido.');
+      }
 
-      await updateJob?.('coaching');
-      const analysisStartedAt = Date.now();
-      const parts = await mapWithConcurrency(segments, 4, async (segment, index) =>
-        generateCoachJson(
-          apiKey,
-          buildSegmentPrompt(data, index, segments.length, segment.offset, segment.duration),
-          segment.fileUri,
-          'video/mp4',
-          false,
-        )
-      );
-      const merged = mergeSegmentReports(parts, segments.map(segment => segment.offset));
-      const analysisMs = Date.now() - analysisStartedAt;
-      return {
-        mode: 'real', provider: 'Gemini', usedInReport: true,
-        summary: merged.summary || 'Análisis completado con Gemini.',
-        strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
-        plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
-        timings: {
-          preprocessing_ms: preprocessingMs,
-          gemini_processing_ms: analysisMs,
-          analysis_ms: analysisMs,
-          total_ms: Date.now() - startedAt,
-          clip_count: segments.length,
-        },
-      };
+      try {
+        await updateJob?.('coaching');
+        const analysisStartedAt = Date.now();
+        const parts = await mapWithConcurrency(prepared.segments, 3, async (segment, index) =>
+          generateCoachJsonInline(
+            apiKey,
+            buildSegmentPrompt(data, index, prepared.segments.length, segment.offset, segment.duration),
+            segment.path,
+          )
+        );
+        const merged = mergeSegmentReports(parts, prepared.segments.map(segment => segment.offset));
+        const analysisMs = Date.now() - analysisStartedAt;
+        return {
+          mode: 'real', provider: 'Gemini', usedInReport: true,
+          summary: merged.summary || 'Análisis completado con Gemini.',
+          strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
+          plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
+          timings: {
+            preprocessing_ms: preprocessingMs,
+            gemini_processing_ms: analysisMs,
+            analysis_ms: analysisMs,
+            total_ms: Date.now() - startedAt,
+            clip_count: prepared.segments.length,
+          },
+        };
+      } finally {
+        await prepared.cleanup();
+      }
     }
     if (!fileName || !fileUri) throw new Error('Falta la referencia del video cargado.');
     if (!fileName.startsWith('files/') || !/^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri)) {
