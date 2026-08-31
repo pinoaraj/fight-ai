@@ -79,9 +79,9 @@ async function updateJob(id: string, status: AnalysisJob['status'], extra: { rep
 
 function makeThreeMinuteClip(inputPath: string, outputPath: string) {
   return new Promise<void>((resolve, reject) => {
-    const encoder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180', '-map', '0:v:0?', '-map', '0:a?', '-vf', "scale='min(854,iw)':-2,fps=15", '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '27', '-threads', '2', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', outputPath], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const encoder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180', '-map', '0:v:0?', '-map', '0:a?', '-c', 'copy', '-movflags', '+faststart', outputPath], { stdio: ['ignore', 'ignore', 'pipe'] });
     const errors: Buffer[] = [];
-    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('El recorte del round tardó demasiado.')); }, 5 * 60 * 1000);
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('El recorte del round tardó demasiado.')); }, 90 * 1000);
     encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
     encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible para preparar el round.')); });
     encoder.on('close', (code) => {

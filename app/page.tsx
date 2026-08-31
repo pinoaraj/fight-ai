@@ -46,7 +46,7 @@ const demo: Report = {
 
 const processingSteps = [
   { title: 'Subiendo video de forma segura', detail: 'Estamos enviando el archivo una sola vez. Mantén esta pestaña abierta.', typical: 'Suele tomar 15–60 s' },
-  { title: 'Convirtiendo el round para IA', detail: 'Creamos una copia ligera y compatible de hasta 3 minutos; tu original permanece intacto.', typical: 'Suele tomar 1–3 min' },
+  { title: 'Recortando el round para IA', detail: 'Tomamos automáticamente los primeros 3 minutos sin alterar tu video original.', typical: 'Suele tomar menos de 1 min' },
   { title: 'Preparando la referencia en Gemini', detail: 'Ya enviamos el round compacto; Gemini confirma el video antes de revisarlo.', typical: 'Suele tomar 30–90 s' },
   { title: 'Leyendo patrones técnicos', detail: 'El coach revisa distancia, defensa, base, salidas y decisiones repetidas.', typical: 'En curso' },
   { title: 'Analizando rival y estrategia', detail: 'Estamos conectando los momentos visibles con correcciones concretas.', typical: 'En curso' },
