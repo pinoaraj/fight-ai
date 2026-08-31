@@ -274,7 +274,7 @@ export default function Home() {
   }
 
   async function requestUploadedAnalysis(session: UploadedAnalysisSession) {
-    const started = await fetch('/api/analyze-uploaded?async=1', {
+    const started = await fetch('/api/analyze-uploaded?async=1' + (session.jobId ? '&retry=1' : ''), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...session.context, fileName: session.fileName, fileUri: session.fileUri, s3Key: session.s3Key, mimeType: session.mimeType, jobId: session.jobId }),
     });
