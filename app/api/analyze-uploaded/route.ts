@@ -80,6 +80,58 @@ async function updateJob(id: string, status: AnalysisJob['status'], extra: { rep
   await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { jobId: { S: id } }, UpdateExpression: `SET ${sets.join(', ')}`, ExpressionAttributeNames: names, ExpressionAttributeValues: values }));
 }
 
+async function heartbeatJob(id: string) {
+  if (!tableName) return;
+  const now = Date.now();
+  try {
+    await dynamo.send(new UpdateItemCommand({
+      TableName: tableName,
+      Key: { jobId: { S: id } },
+      UpdateExpression: 'SET updatedAt = :updatedAt, leaseExpiresAt = :lease',
+      ConditionExpression: 'leaseOwner = :owner AND #status IN (:downloading, :converting, :uploading, :preparing, :coaching, :queued)',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':updatedAt': { N: String(now) },
+        ':lease': { N: String(now + leaseMs) },
+        ':owner': { S: workerId },
+        ':queued': { S: 'queued' },
+        ':downloading': { S: 'downloading' },
+        ':converting': { S: 'converting' },
+        ':uploading': { S: 'uploading' },
+        ':preparing': { S: 'preparing' },
+        ':coaching': { S: 'coaching' },
+      },
+    }));
+  } catch {
+    // Lease changed or job completed; heartbeat should stop silently.
+  }
+}
+
+async function forceRetryIfAbandoned(job: AnalysisJob) {
+  if (!tableName || !activeStatus(job.status)) return job;
+  const now = Date.now();
+  if (now - job.updatedAt < 2 * 60 * 1000) return job;
+  await dynamo.send(new UpdateItemCommand({
+    TableName: tableName,
+    Key: { jobId: { S: job.id } },
+    UpdateExpression: 'SET #status = :queued, leaseExpiresAt = :zero, updatedAt = :now REMOVE leaseOwner',
+    ConditionExpression: 'updatedAt = :previous AND #status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching)',
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: {
+      ':queued': { S: 'queued' },
+      ':zero': { N: '0' },
+      ':now': { N: String(now) },
+      ':previous': { N: String(job.updatedAt) },
+      ':downloading': { S: 'downloading' },
+      ':converting': { S: 'converting' },
+      ':uploading': { S: 'uploading' },
+      ':preparing': { S: 'preparing' },
+      ':coaching': { S: 'coaching' },
+    },
+  }));
+  return { ...job, status: 'queued' as const, updatedAt: now, leaseExpiresAt: 0 };
+}
+
 function makeThreeMinuteClip(inputPath: string, outputPath: string) {
   return new Promise<void>((resolve, reject) => {
     const encoder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180', '-map', '0:v:0?', '-map', '0:a?', '-c', 'copy', '-movflags', '+faststart', outputPath], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -457,13 +509,14 @@ async function claimAndRun(job: AnalysisJob) {
       ExpressionAttributeValues: { ':owner': { S: workerId }, ':lease': { N: String(now + leaseMs) }, ':updatedAt': { N: String(now) }, ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
     }));
   } catch { return; }
+  const heartbeat = setInterval(() => { void heartbeatJob(job.id); }, 30_000);
   void completeAnalysis(job.payload, async (status) => updateJob(job.id, status)).then(
     (report) => updateJob(job.id, 'complete', { report, clearLease: true }),
     (error) => {
       console.error('Fight AI uploaded-file async analysis error', error);
       return updateJob(job.id, 'failed', { error: error instanceof Error ? error.message : 'No se pudo completar el análisis.', clearLease: true });
     },
-  );
+  ).finally(() => clearInterval(heartbeat));
 }
 
 async function runAnalysisWorker() {
@@ -513,8 +566,13 @@ export async function POST(req: NextRequest) {
     } catch (error) {
       const existing = await getJob(id);
       if (!existing) throw error;
-      await claimAndRun(existing);
-      return NextResponse.json({ id, status: existing.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+      const retryRequested = new URL(req.url).searchParams.get('retry') === '1';
+      let reusable = existing;
+      if (retryRequested) {
+        try { reusable = await forceRetryIfAbandoned(existing); } catch { reusable = (await getJob(id)) || existing; }
+      }
+      await claimAndRun(reusable);
+      return NextResponse.json({ id, status: reusable.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }
     await claimAndRun(job);
     return NextResponse.json({ id, status: job.status }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
