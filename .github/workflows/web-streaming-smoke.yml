@@ -11,6 +11,8 @@ on:
       - 'app/api/analyze-uploaded/**'
       - 'app/api/health/**'
       - 'app/page.tsx'
+      - 'scripts/**'
+      - 'Dockerfile'
 
 permissions:
   contents: read
