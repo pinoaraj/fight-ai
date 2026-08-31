@@ -807,13 +807,14 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
 async function claimAndRun(job: AnalysisJob, waitForCompletion = false) {
   if (!activeStatus(job.status) || !tableName) return;
   const now = Date.now();
+  const staleBefore = now - 2 * 60 * 1000;
   try {
     await dynamo.send(new UpdateItemCommand({
       TableName: tableName, Key: { jobId: { S: job.id } },
       UpdateExpression: 'SET leaseOwner = :owner, leaseExpiresAt = :lease, updatedAt = :updatedAt',
-      ConditionExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
+      ConditionExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now OR updatedAt < :staleBefore)',
       ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':owner': { S: workerId }, ':lease': { N: String(now + leaseMs) }, ':updatedAt': { N: String(now) }, ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
+      ExpressionAttributeValues: { ':owner': { S: workerId }, ':lease': { N: String(now + leaseMs) }, ':updatedAt': { N: String(now) }, ':now': { N: String(now) }, ':staleBefore': { N: String(staleBefore) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
     }));
   } catch { return; }
   const heartbeat = setInterval(() => { void heartbeatJob(job.id); }, 30_000);
@@ -840,11 +841,12 @@ async function runAnalysisWorker() {
   workerScanning = true;
   try {
     const now = Date.now();
+    const staleBefore = now - 2 * 60 * 1000;
     const response = await dynamo.send(new ScanCommand({
       TableName: tableName,
-      FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
+      FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now OR updatedAt < :staleBefore)',
       ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
+      ExpressionAttributeValues: { ':now': { N: String(now) }, ':staleBefore': { N: String(staleBefore) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
     }));
     for (const item of response.Items || []) {
       const job = itemToJob(item);
@@ -901,11 +903,12 @@ export async function GET(req: NextRequest) {
     try {
       if (!tableName) return NextResponse.json({ error: 'La persistencia de análisis aún no está configurada.' }, { status: 503 });
       const now = Date.now();
+      const staleBefore = now - 2 * 60 * 1000;
       const response = await dynamo.send(new ScanCommand({
         TableName: tableName,
-        FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
+        FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now OR updatedAt < :staleBefore)',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: { ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
+        ExpressionAttributeValues: { ':now': { N: String(now) }, ':staleBefore': { N: String(staleBefore) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
       }));
       const job = (response.Items || []).map(itemToJob).find((candidate): candidate is AnalysisJob => Boolean(candidate));
       if (!job) return NextResponse.json({ status: 'idle' }, { headers: { 'Cache-Control': 'no-store' } });
