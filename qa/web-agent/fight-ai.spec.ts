@@ -111,6 +111,56 @@ test('browser uses multipart S3 then a durable uploaded-file analysis job', asyn
   await expect(page.getByTestId('pipeline-timings')).toContainText('Carga');
 });
 
+test('mobile upload falls back to same-origin proxy when signed S3 PUT fails', async ({ page }) => {
+  const video = realVideo();
+  let proxySeen = false;
+  let completeParts: unknown[] = [];
+
+  await page.route('**/api/health', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, backendConfigured: false, geminiConfigured: true, analysisReady: true }),
+  }));
+  await page.route('**/api/direct-upload**', async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('proxy') === '1') {
+      proxySeen = true;
+      expect(route.request().postDataBuffer()?.byteLength || 0).toBeGreaterThan(0);
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ETag: '"proxy-part"', PartNumber: 1 }) });
+    }
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (body.action === 'start') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/proxy.mp4', uploadId: 'proxy-upload' }) });
+    if (body.action === 'sign') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ url: 'https://upload.invalid/proxy-fail' }) });
+    if (body.action === 'complete') {
+      completeParts = body.parts as unknown[];
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/proxy.mp4' }) });
+    }
+    return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'unexpected' }) });
+  });
+  await page.route('https://upload.invalid/**', route => route.abort('failed'));
+  await page.route('**/api/analyze-uploaded**', async route => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'proxy-job', status: 'queued' }) });
+    }
+    return route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ status: 'complete', report: {
+        mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Fallback móvil verificado.',
+        strengths: ['Jab'], priorities: ['Ángulo'], opponent: ['Retrocede'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
+        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Visible', correction: 'Salir por ángulo' }],
+      } }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(video);
+  await page.getByTestId('glove-color').fill('rojos');
+  await page.getByTestId('analyze-button').click();
+  await expect(page.getByText('Fallback móvil verificado.', { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(proxySeen).toBe(true);
+  expect(completeParts).toEqual([{ ETag: '"proxy-part"', PartNumber: 1 }]);
+});
+
 test('a transient durable-job failure retries without uploading the video again', async ({ page }) => {
   const video = realVideo();
   let uploadCalls = 0;
