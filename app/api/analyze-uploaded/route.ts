@@ -544,8 +544,12 @@ async function claimAndRun(job: AnalysisJob) {
   } catch { return; }
   const heartbeat = setInterval(() => { void heartbeatJob(job.id); }, 30_000);
   void completeAnalysis(job.payload, async (status) => updateJob(job.id, status)).then(
-    (report) => updateJob(job.id, 'complete', { report, clearLease: true }),
+    (report) => {
+      clearInterval(heartbeat);
+      return updateJob(job.id, 'complete', { report, clearLease: true });
+    },
     (error) => {
+      clearInterval(heartbeat);
       console.error('Fight AI uploaded-file async analysis error', error);
       const message = error instanceof Error ? error.message : 'No se pudo completar el análisis.';
       if (message.startsWith('GEMINI_BUSY:')) {
@@ -553,7 +557,7 @@ async function claimAndRun(job: AnalysisJob) {
       }
       return updateJob(job.id, 'failed', { error: message, clearLease: true });
     },
-  ).finally(() => clearInterval(heartbeat));
+  );
 }
 
 async function runAnalysisWorker() {
