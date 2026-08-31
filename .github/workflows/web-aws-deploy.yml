@@ -11,6 +11,7 @@ on:
       - '.dockerignore'
       - 'package.json'
       - 'tsconfig.json'
+      - 'instrumentation.ts'
       - 'app/**'
       - 'infra/aws/**'
 
