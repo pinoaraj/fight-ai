@@ -513,19 +513,20 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
 
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, externalUrl = false) {
   const configured = process.env.GEMINI_MODEL?.trim();
-  const candidates = externalUrl
+  const isGeminiFile = /^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri);
+  const candidates = externalUrl || isGeminiFile
     ? ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
-    : Array.from(new Set([configured || '', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.6-flash'].filter(Boolean)));
+    : Array.from(new Set([configured || '', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
-    const maxAttempts = externalUrl ? 2 : 3;
+    const maxAttempts = externalUrl || isGeminiFile ? 2 : 3;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let response: Response;
       try {
         response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
           method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
           body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
-          signal: AbortSignal.timeout(externalUrl ? 4 * 60 * 1000 : 8 * 60 * 1000),
+          signal: AbortSignal.timeout(externalUrl ? 120_000 : isGeminiFile ? 150_000 : 4 * 60 * 1000),
         });
       } catch {
         lastStatus = 0;
