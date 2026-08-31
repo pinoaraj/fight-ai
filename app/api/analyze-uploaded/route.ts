@@ -129,6 +129,139 @@ async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: stri
   }
 }
 
+
+type SignedSegment = { uri: string; offset: number; duration: number; size: number };
+
+function makeClipRange(inputPath: string, outputPath: string, startSeconds: number, durationSeconds: number) {
+  return new Promise<void>((resolve, reject) => {
+    const args = ['-hide_banner', '-loglevel', 'error', '-y'];
+    if (startSeconds > 0) args.push('-ss', String(startSeconds));
+    args.push('-i', inputPath, '-t', String(durationSeconds), '-map', '0:v:0?', '-map', '0:a?', '-c', 'copy', '-avoid_negative_ts', 'make_zero', '-movflags', '+faststart', outputPath);
+    const encoder = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('La segmentación del round tardó demasiado.')); }, 90 * 1000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible para segmentar el round.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo segmentar el round.'));
+    });
+  });
+}
+
+async function prepareSignedSegments(data: UploadedAnalysisRequest, updateJob?: (status: AnalysisJob['status']) => void | Promise<void>) {
+  const key = val(data, 's3Key');
+  if (!key || !key.startsWith('uploads/') || !bucket) throw new Error('Referencia de video no válida.');
+  const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!object.Body || !object.ContentLength) throw new Error('No se pudo recuperar el video cargado.');
+  const inputPath = join(tmpdir(), 'fight-ai-source-' + crypto.randomUUID() + '.mp4');
+  const clipPath = join(tmpdir(), 'fight-ai-round-' + crypto.randomUUID() + '.mp4');
+  const segmentPaths: string[] = [];
+  try {
+    await updateJob?.('downloading');
+    await pipeline(object.Body as Readable, createWriteStream(inputPath, { flags: 'wx' }));
+    await updateJob?.('converting');
+    await makeThreeMinuteClip(inputPath, clipPath);
+    const clip = await stat(clipPath);
+    if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
+
+    const targetBytes = 55 * 1024 * 1024;
+    const maxBytes = 95 * 1024 * 1024;
+    const count = Math.max(1, Math.min(8, Math.ceil(clip.size / targetBytes)));
+    if (clip.size / count > maxBytes) throw new Error('El video supera la ruta rápida sin recodificar.');
+
+    const duration = 180 / count;
+    const local: { path: string; offset: number; duration: number; size: number }[] = [];
+    if (count === 1) {
+      local.push({ path: clipPath, offset: 0, duration: 180, size: clip.size });
+    } else {
+      for (let i = 0; i < count; i++) {
+        const offset = i * duration;
+        const pieceDuration = Math.min(duration, 180 - offset);
+        const path = join(tmpdir(), 'fight-ai-segment-' + crypto.randomUUID() + '.mp4');
+        segmentPaths.push(path);
+        await makeClipRange(clipPath, path, offset, pieceDuration);
+        const info = await stat(path);
+        if (!info.size || info.size > maxBytes) throw new Error('Un segmento del video sigue siendo demasiado pesado.');
+        local.push({ path, offset, duration: pieceDuration, size: info.size });
+      }
+    }
+
+    await updateJob?.('uploading');
+    const prefix = 'uploads/analysis-proxy/' + crypto.randomUUID();
+    const result: SignedSegment[] = [];
+    for (let i = 0; i < local.length; i++) {
+      const item = local[i];
+      const proxyKey = prefix + '/segment-' + String(i + 1).padStart(2, '0') + '.mp4';
+      await s3.send(new PutObjectCommand({ Bucket: bucket, Key: proxyKey, Body: createReadStream(item.path), ContentType: 'video/mp4', ServerSideEncryption: 'AES256' }));
+      const uri = await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: proxyKey }), { expiresIn: 1800 });
+      result.push({ uri, offset: item.offset, duration: item.duration, size: item.size });
+    }
+    return result;
+  } finally {
+    await Promise.all([unlink(inputPath).catch(() => undefined), unlink(clipPath).catch(() => undefined), ...segmentPaths.map(path => unlink(path).catch(() => undefined))]);
+  }
+}
+
+function absoluteTime(local: string, offsetSeconds: number) {
+  const parts = local.split(':').map(Number);
+  const seconds = parts.length === 2 && parts.every(Number.isFinite) ? parts[0] * 60 + parts[1] : 0;
+  const total = Math.max(0, Math.round(seconds + offsetSeconds));
+  return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+}
+
+function buildSegmentPrompt(data: UploadedAnalysisRequest, index: number, count: number, offset: number, duration: number) {
+  const descriptors = [
+    val(data,'glove_color') && 'guantes ' + val(data,'glove_color'),
+    val(data,'top_color') && 'ropa/polera ' + val(data,'top_color'),
+    val(data,'relative_height') && 'altura relativa ' + val(data,'relative_height'),
+    val(data,'build') && 'contextura ' + val(data,'build'),
+    val(data,'fighter_notes'),
+  ].filter(Boolean).join('; ');
+  const languageInstruction = val(data,'language','es') === 'en' ? 'Write the entire report in English.' : 'Escribe todo el reporte en español natural.';
+  return 'Actúa como entrenador de boxeo/kickboxing de alto nivel. ' + languageInstruction +
+    '\nEste es el segmento ' + (index + 1) + ' de ' + count + ' del mismo round, aproximadamente desde ' + absoluteTime('00:00', offset) + ' hasta ' + absoluteTime('00:00', offset + duration) + '.' +
+    '\nPeleador objetivo: ' + (descriptors || 'peleador identificado por el usuario') + '. Guardia: ' + val(data,'stance','unknown') + '. Disciplina: ' + val(data,'sport','boxing') + '.' +
+    '\nFoco: ' + val(data,'analysis_focus','technique,weaknesses,strategy') + '. ' + val(data,'custom_focus','') +
+    '\nNo cambies de peleador si la identidad se vuelve dudosa. No inventes conteos, porcentajes, velocidad ni precisión.' +
+    '\nBusca patrones visibles en guardia, base, entradas, salidas, defensa tras combinar, distancia, timing, ángulos, pivotes, footwork, golpes, ritmo, presión y lectura del rival.' +
+    '\nConecta observación → consecuencia → corrección → drill. Usa 2–5 evidencias con timestamps MM:SS LOCALES de este segmento.' +
+    '\nDevuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.';
+}
+
+function mergeSegmentReports(parts: Record<string, unknown>[], offsets: number[]) {
+  const stringList = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
+  const unique = (values: string[], limit: number) => Array.from(new Set(values.map(x => x.trim()).filter(Boolean))).slice(0, limit);
+  const evidence: { time: string; title: string; observation: string; correction: string }[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const items = Array.isArray(parts[i].evidence) ? parts[i].evidence as unknown[] : [];
+    for (const raw of items) {
+      if (!raw || typeof raw !== 'object') continue;
+      const item = raw as Record<string, unknown>;
+      const local = typeof item.time === 'string' ? item.time : '00:00';
+      const observation = typeof item.observation === 'string' ? item.observation : '';
+      if (!observation) continue;
+      evidence.push({
+        time: absoluteTime(local, offsets[i] || 0),
+        title: typeof item.title === 'string' ? item.title : 'Evidencia',
+        observation,
+        correction: typeof item.correction === 'string' ? item.correction : '',
+      });
+    }
+  }
+  evidence.sort((a,b) => a.time.localeCompare(b.time));
+  return {
+    summary: parts.map(x => typeof x.summary === 'string' ? x.summary.trim() : '').filter(Boolean).slice(0, 3).join(' '),
+    strengths: unique(parts.flatMap(x => stringList(x.strengths)), 5),
+    priorities: unique(parts.flatMap(x => stringList(x.priorities)), 3),
+    opponent: unique(parts.flatMap(x => stringList(x.opponent)), 5),
+    plan: unique(parts.flatMap(x => stringList(x.plan)), 6),
+    drills: unique(parts.flatMap(x => stringList(x.drills)), 6),
+    evidence: evidence.slice(0, 8),
+  };
+}
+
 const coachingSchema = {
   type: 'object', properties: {
     summary: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
