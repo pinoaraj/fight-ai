@@ -10,6 +10,20 @@ const s3 = new S3Client({ region });
 export async function POST(req: NextRequest) {
   if (!bucket) return NextResponse.json({ error: 'La carga directa aún no está configurada.' }, { status: 503 });
   try {
+    const url = new URL(req.url);
+    if (url.searchParams.get('proxy') === '1') {
+      const key = url.searchParams.get('key') || '';
+      const uploadId = url.searchParams.get('uploadId') || '';
+      const partNumber = Number(url.searchParams.get('partNumber') || '0');
+      if (!key.startsWith('uploads/') || !uploadId || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+        return NextResponse.json({ error: 'Parte de carga inválida.' }, { status: 400 });
+      }
+      const bytes = Buffer.from(await req.arrayBuffer());
+      if (!bytes.length) return NextResponse.json({ error: 'La parte del video está vacía.' }, { status: 400 });
+      const uploaded = await s3.send(new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: bytes }));
+      if (!uploaded.ETag) return NextResponse.json({ error: 'S3 no confirmó la parte del video.' }, { status: 502 });
+      return NextResponse.json({ ETag: uploaded.ETag, PartNumber: partNumber });
+    }
     const body = await req.json() as { action?: string; name?: string; type?: string; key?: string; uploadId?: string; partNumber?: number; parts?: { ETag: string; PartNumber: number }[] };
     if (body.action === 'start') {
       const key = `uploads/${crypto.randomUUID()}-${(body.name || 'sparring.mp4').replace(/[^\w.-]/g, '_')}`;
