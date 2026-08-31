@@ -2,36 +2,56 @@ name: Web Streaming Production Smoke
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Web AWS Deploy"]
-    types: [completed]
+  push:
     branches: [web/mvp]
+    paths:
+      - '.github/workflows/web-streaming-smoke.yml'
+      - '.github/workflows/web-aws-deploy.yml'
+      - 'app/api/direct-upload/**'
+      - 'app/api/analyze-uploaded/**'
+      - 'app/api/health/**'
+      - 'app/page.tsx'
 
 permissions:
   contents: read
 
 jobs:
   streaming-smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || 'web/mvp' }}
+          ref: web/mvp
 
       - name: Verify public multipart S3 and durable Gemini analysis
         run: |
           set -euo pipefail
           URL="https://d1ga34t3tjgix2.cloudfront.net"
 
-          curl --fail --max-time 15 -sS "$URL/api/health" | tee /tmp/health.json
-          python - <<'PY'
-          import json
+          READY=0
+          for ATTEMPT in $(seq 1 90); do
+            if curl --fail --max-time 15 -sS "$URL/api/health" > /tmp/health.json; then
+              export EXPECTED_SHA="$GITHUB_SHA"
+              if python - <<'PY'
+          import json, os, sys
           data=json.load(open('/tmp/health.json',encoding='utf-8'))
-          assert data.get('analysisReady') is True, data
-          assert data.get('geminiConfigured') is True, data
+          ok = data.get('analysisReady') is True and data.get('geminiConfigured') is True and data.get('buildSha') == os.environ['EXPECTED_SHA']
+          print('Public health:', data)
+          sys.exit(0 if ok else 1)
           PY
+              then
+                READY=1
+                break
+              fi
+            fi
+            sleep 10
+          done
+          if [ "$READY" -ne 1 ]; then
+            echo "Public site never reached expected build SHA $GITHUB_SHA" >&2
+            cat /tmp/health.json >&2 || true
+            exit 1
+          fi
 
           python - <<'PY'
           import base64, pathlib
