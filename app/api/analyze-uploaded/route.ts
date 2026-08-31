@@ -291,15 +291,16 @@ function interactionOutputText(raw: unknown) {
   return chunks.join('').trim();
 }
 
-async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string) {
+async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, externalUrl = false) {
   const configured = process.env.GEMINI_MODEL?.trim();
-  const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash'].filter(Boolean)));
+  const candidates = externalUrl ? ['gemini-2.5-flash'] : Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < (externalUrl ? 2 : 5); attempt++) {
       const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
         method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
+        signal: AbortSignal.timeout(externalUrl ? 4 * 60 * 1000 : 8 * 60 * 1000),
       });
       lastStatus = response.status; retryAfter = Number(response.headers.get('retry-after') || 0);
       const body = await response.text();
@@ -308,7 +309,7 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
         if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
         return cleanGeminiJson(text);
       }
-      if ((response.status === 429 || response.status === 503) && attempt < 4) { await sleep(Math.max(retryAfter * 1000, 8000 * (attempt + 1))); continue; }
+      if ((response.status === 429 || response.status === 503) && attempt + 1 < (externalUrl ? 2 : 5)) { await sleep(Math.max(retryAfter * 1000, 6000 * (attempt + 1))); continue; }
       break;
     }
   }
