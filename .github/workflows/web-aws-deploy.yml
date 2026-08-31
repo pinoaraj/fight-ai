@@ -191,7 +191,9 @@ jobs:
           fi
           aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
           DISTRIBUTION_ARN="arn:aws:cloudfront::379549361550:distribution/$DISTRIBUTION_ID"
-          aws pricing-plan-manager create-subscription --plan-family CloudFront --plan-tier FREE --resource-arns "$DISTRIBUTION_ARN" "$CLOUDFRONT_WAF_ARN" --approval-mode IMMEDIATE --client-token "fight-ai-cloudfront-free-$DISTRIBUTION_ID" --region "$CLOUDFRONT_PLAN_REGION" >/dev/null
+          if ! aws pricing-plan-manager create-subscription --plan-family CloudFront --plan-tier FREE --resource-arns "$DISTRIBUTION_ARN" "$CLOUDFRONT_WAF_ARN" --approval-mode IMMEDIATE --client-token "fight-ai-cloudfront-free-$DISTRIBUTION_ID" --region "$CLOUDFRONT_PLAN_REGION" >/dev/null 2>&1; then
+            echo "CloudFront FREE plan subscription unavailable for this distribution; keeping the deployed HTTPS distribution without the optional plan subscription." >&2
+          fi
           CLOUDFRONT_DOMAIN=$(aws cloudfront get-distribution --id "$DISTRIBUTION_ID" --query 'Distribution.DomainName' --output text)
           test -n "$CLOUDFRONT_DOMAIN" && test "$CLOUDFRONT_DOMAIN" != "None"
           echo "CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN" >> "$GITHUB_ENV"
@@ -226,7 +228,7 @@ jobs:
             URL="https://$CLOUDFRONT_DOMAIN"
           else
             URL="http://$ALB_DNS"
-            echo "WARNING: CloudFront HTTPS is pending IAM permissions; verifying the deployed ALB origin." >&2
+            echo "WARNING: CloudFront HTTPS domain was not resolved; verifying the deployed ALB origin as a fallback." >&2
           fi
           echo "Fight AI URL: $URL"
           READY=0
