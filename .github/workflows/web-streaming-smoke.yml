@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: web-streaming-production-smoke
+  cancel-in-progress: true
+
 jobs:
   streaming-smoke:
     runs-on: ubuntu-latest
