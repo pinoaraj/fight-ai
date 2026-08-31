@@ -1,4 +1,4 @@
-import { AttributeValue, DynamoDBClient, GetItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
+import { AttributeValue, DynamoDBClient, GetItemCommand, PutItemCommand, ScanCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -38,6 +38,8 @@ const dynamo = new DynamoDBClient({ region });
 const s3 = new S3Client({ region });
 const leaseMs = 12 * 60 * 1000;
 const workerId = crypto.randomUUID();
+let workerStarted = false;
+let workerScanning = false;
 
 function activeStatus(status: AnalysisJob['status']) {
   return status === 'queued' || status === 'downloading' || status === 'converting' || status === 'uploading' || status === 'preparing' || status === 'coaching';
@@ -296,6 +298,38 @@ async function claimAndRun(job: AnalysisJob) {
     },
   );
 }
+
+async function runAnalysisWorker() {
+  if (!tableName || workerScanning) return;
+  workerScanning = true;
+  try {
+    const now = Date.now();
+    const response = await dynamo.send(new ScanCommand({
+      TableName: tableName,
+      Limit: 8,
+      FilterExpression: '#status IN (:queued, :downloading, :converting, :uploading, :preparing, :coaching) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt < :now)',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':now': { N: String(now) }, ':queued': { S: 'queued' }, ':downloading': { S: 'downloading' }, ':converting': { S: 'converting' }, ':uploading': { S: 'uploading' }, ':preparing': { S: 'preparing' }, ':coaching': { S: 'coaching' } },
+    }));
+    for (const item of response.Items || []) {
+      const job = itemToJob(item);
+      if (job) await claimAndRun(job);
+    }
+  } catch (error) {
+    console.error('Fight AI durable worker scan error', error);
+  } finally {
+    workerScanning = false;
+  }
+}
+
+function startAnalysisWorker() {
+  if (workerStarted || !tableName) return;
+  workerStarted = true;
+  void runAnalysisWorker();
+  setInterval(() => { void runAnalysisWorker(); }, 5000);
+}
+
+startAnalysisWorker();
 
 export async function POST(req: NextRequest) {
   try {
