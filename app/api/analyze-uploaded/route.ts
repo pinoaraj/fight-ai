@@ -1,6 +1,12 @@
 import { AttributeValue, DynamoDBClient, GetItemCommand, PutItemCommand, UpdateItemCommand } from '@aws-sdk/client-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { spawn } from 'node:child_process';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { stat, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
@@ -71,25 +77,50 @@ async function updateJob(id: string, status: AnalysisJob['status'], extra: { rep
   await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { jobId: { S: id } }, UpdateExpression: `SET ${sets.join(', ')}`, ExpressionAttributeNames: names, ExpressionAttributeValues: values }));
 }
 
+function makeThreeMinuteClip(inputPath: string, outputPath: string) {
+  return new Promise<void>((resolve, reject) => {
+    const encoder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180', '-map', '0:v:0?', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outputPath], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('El recorte del round tardó demasiado.')); }, 12 * 60 * 1000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible para preparar el round.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo preparar los primeros 3 minutos.'));
+    });
+  });
+}
+
 async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: string) {
   const key = val(data, 's3Key');
   if (!key || !key.startsWith('uploads/') || !bucket) throw new Error('Referencia de video no válida.');
   const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   if (!object.Body || !object.ContentLength) throw new Error('No se pudo recuperar el video cargado.');
-  const mimeType = object.ContentType || val(data, 'mimeType', 'video/mp4');
-  const start = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
-    method: 'POST', headers: { 'x-goog-api-key': apiKey, 'X-Goog-Upload-Protocol': 'resumable', 'X-Goog-Upload-Command': 'start', 'X-Goog-Upload-Header-Content-Length': String(object.ContentLength), 'X-Goog-Upload-Header-Content-Type': mimeType, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file: { display_name: val(data, 'fileName', key).slice(0, 180) } }), cache: 'no-store',
-  });
-  if (!start.ok) throw new Error(`Gemini no pudo iniciar la carga (${start.status}).`);
-  const uploadUrl = start.headers.get('x-goog-upload-url');
-  if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga.');
-  const body = Readable.toWeb(object.Body as Readable);
-  const uploaded = await fetch(uploadUrl, { method: 'POST', headers: { 'Content-Length': String(object.ContentLength), 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' }, body, cache: 'no-store', signal: AbortSignal.timeout(15 * 60 * 1000), duplex: 'half' } as RequestInit & { duplex: 'half' });
-  if (!uploaded.ok) throw new Error(`Gemini no pudo cargar el video (${uploaded.status}).`);
-  const info = await uploaded.json() as { file?: { name?: string; uri?: string } };
-  if (!info.file?.name || !info.file.uri) throw new Error('Gemini no devolvió referencia del video.');
-  return { fileName: info.file.name, fileUri: info.file.uri, mimeType };
+  const inputPath = join(tmpdir(), `fight-ai-source-${crypto.randomUUID()}.mp4`);
+  const clipPath = join(tmpdir(), `fight-ai-round-${crypto.randomUUID()}.mp4`);
+  try {
+    await pipeline(object.Body as Readable, createWriteStream(inputPath, { flags: 'wx' }));
+    await makeThreeMinuteClip(inputPath, clipPath);
+    const clip = await stat(clipPath);
+    if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
+    const mimeType = 'video/mp4';
+    const start = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+      method: 'POST', headers: { 'x-goog-api-key': apiKey, 'X-Goog-Upload-Protocol': 'resumable', 'X-Goog-Upload-Command': 'start', 'X-Goog-Upload-Header-Content-Length': String(clip.size), 'X-Goog-Upload-Header-Content-Type': mimeType, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: { display_name: `round-3min-${val(data, 'fileName', key).slice(0, 160)}` } }), cache: 'no-store',
+    });
+    if (!start.ok) throw new Error(`Gemini no pudo iniciar la carga (${start.status}).`);
+    const uploadUrl = start.headers.get('x-goog-upload-url');
+    if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga.');
+    const body = Readable.toWeb(createReadStream(clipPath) as Readable);
+    const uploaded = await fetch(uploadUrl, { method: 'POST', headers: { 'Content-Length': String(clip.size), 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' }, body, cache: 'no-store', signal: AbortSignal.timeout(15 * 60 * 1000), duplex: 'half' } as RequestInit & { duplex: 'half' });
+    if (!uploaded.ok) throw new Error(`Gemini no pudo cargar el video (${uploaded.status}).`);
+    const info = await uploaded.json() as { file?: { name?: string; uri?: string } };
+    if (!info.file?.name || !info.file.uri) throw new Error('Gemini no devolvió referencia del video.');
+    return { fileName: info.file.name, fileUri: info.file.uri, mimeType };
+  } finally {
+    await Promise.all([unlink(inputPath).catch(() => undefined), unlink(clipPath).catch(() => undefined)]);
+  }
 }
 
 const coachingSchema = {
