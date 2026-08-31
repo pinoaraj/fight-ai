@@ -73,7 +73,7 @@ test('browser uses multipart S3 then a durable uploaded-file analysis job', asyn
     if (body.action === 'sign') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ url: 'https://upload.invalid/part' }) });
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/qa.mp4' }) });
   });
-  await page.route('https://upload.invalid/**', async route => route.fulfill({ status: 200, headers: { etag: '"qa-part"', 'access-control-allow-origin': '*' } }));
+  await page.route('https://upload.invalid/**', async route => route.fulfill({ status: 200, headers: { etag: '"qa-part"', 'access-control-allow-origin': '*', 'access-control-expose-headers': 'ETag' } }));
   await page.route('**/api/analyze-uploaded**', async route => {
     uploadedAnalysisSeen = true;
     if (route.request().method() === 'POST') {
@@ -126,7 +126,7 @@ test('a transient durable-job failure retries without uploading the video again'
     if (body.action === 'sign') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ url: 'https://upload.invalid/retry' }) });
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/retry.mp4' }) });
   });
-  await page.route('https://upload.invalid/**', async route => route.fulfill({ status: 200, headers: { etag: '"retry-part"', 'access-control-allow-origin': '*' } }));
+  await page.route('https://upload.invalid/**', async route => route.fulfill({ status: 200, headers: { etag: '"retry-part"', 'access-control-allow-origin': '*', 'access-control-expose-headers': 'ETag' } }));
   await page.route('**/api/analyze-uploaded**', async route => {
     analysisCalls += 1;
     if (route.request().method() === 'POST') return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'retry-job', status: 'queued' }) });
