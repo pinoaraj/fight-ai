@@ -2,47 +2,59 @@
 
 Web client for the Fight AI combat-sparring analysis platform.
 
-## Current status
+## Status — controlled beta ready (2026-08-31)
 
-Working branch: `web/mvp`
+Canonical branch: `web/mvp`  
+PR: #2  
+Public HTTPS beta: https://d1ga34t3tjgix2.cloudfront.net
 
-Project continuity guide for any coding agent: `docs/PROJECT_CONTINUITY.md`
+The web beta is cleared for controlled beta testing. The release gate has passed:
+- TypeScript + Next.js production build;
+- shared-backend runtime QA;
+- Playwright desktop + Pixel-class mobile journeys;
+- real MP4 preview and fighter marking;
+- multipart private S3 upload;
+- durable DynamoDB job + ECS worker recovery;
+- Docker production build;
+- AWS GitHub OIDC deploy;
+- CloudFront HTTPS + ECS health;
+- deployed Gemini red-gloves smoke with `usedInReport=true` and timestamp evidence.
 
-Living product/architecture spec: `docs/GRAPIFY_BETA_SPEC.md`
+## Current architecture
 
-Operational handoff: `docs/CODEX_HANDOFF_2026-08-29.md`
+Browser → signed multipart S3 upload → DynamoDB durable job → ECS worker → 0:00–3:00 stream-copy clip → Gemini → evidence-first coaching report.
 
-## Current web baseline
+The original upload remains private and intact in S3. Long-running analysis does not depend on the browser request staying open. HEVC/Main10 is not fully transcoded by default.
+
+## Product baseline
 
 - Next.js 15.5.24 + React 19 + TypeScript
-- local video upload/playback
-- target fighter selection
-- boxing/kickboxing + stance inputs
-- timestamped coaching report
-- strengths, priorities, opponent analysis, tactical plan and drills
-- explicit provider attribution with `usedInReport`
-- shared-backend adapter
-- server-side Gemini fallback
-- HEVC-compatible frame selection and server-rendered evidence JPEGs for every report timestamp and PDF
-- visible analysis ETA, elapsed time and phase-by-phase progress
-- HTTPS public entry point provisioned through CloudFront for Android/iOS
-- CI + Docker build
-- AWS deploy through GitHub OIDC
-- CloudFront + ECR + ECS/Fargate + ALB
-- public health endpoint
+- target fighter visual anchor + descriptors
+- boxing/kickboxing, stance, language and coach focus
+- truthful provider attribution with `usedInReport`
+- strengths, top priorities, opponent reading, tactical plan and drills
+- timestamped evidence and reproducible playback
+- HEVC-compatible selection/evidence JPEGs
+- Visual Coach diagrams and correction references
+- PDF/print gate waits for real evidence images
+- phase-by-phase durable analysis progress
+- private S3 + DynamoDB TTL
+- ECS/Fargate + ALB + CloudFront HTTPS
+- GitHub Actions OIDC; no static AWS credentials in source
 
-## Product rule
+## Source of truth
 
-The Android client remains the source of truth for product flow and report hierarchy. The web client must reach Android parity rather than evolve into a separate product.
+Read in this order:
+1. `AGENTS.md`
+2. `docs/STATUS_2026-08-31.md`
+3. `docs/PROJECT_CONTINUITY.md`
+4. `docs/GRAPIFY_BETA_SPEC.md`
+5. `docs/CODEX_HANDOFF_2026-08-29.md`
 
-## Next
+Android remains the cross-platform interaction/report-semantics baseline. Web must stay contract-compatible rather than becoming a separate product.
 
-The web code should be migrated from this branch into the dedicated repository:
+## Beta discipline
 
-`pinoaraj/fight-ai-web`
+Controlled testers may use the HTTPS CloudFront URL. Treat uploaded sparring as private user data. Do not commit videos, Gemini keys, AWS credentials, tokens or generated private evidence.
 
-After migration, update AWS GitHub OIDC trust to the new repository subject before enabling deploys from the new repo.
-
-## Security
-
-Do not commit private sparring footage, Gemini keys, AWS credentials or other secrets.
+A beta-ready build is not a general-public-production declaration. Continue real-device regressions, especially large HEVC files, evidence/PDF completeness and fighter identity continuity.

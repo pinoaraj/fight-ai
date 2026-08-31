@@ -1,6 +1,6 @@
 # Grapify / Fight AI — Living Product & Architecture Spec
 
-_Last updated: 2026-08-29_
+_Last updated: 2026-08-31_
 
 ## 1. Product goal
 Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
@@ -121,15 +121,15 @@ The direct Gemini path now requires a higher clinical-coaching standard. Prompt 
 - forbid invented exact punch counts, percentages or unsupported statistics.
 
 ## 7. Video speed / large-file path
-A key user-facing problem is analysis latency on real sparring files. The durable path separates the large browser upload from analysis: the browser splits the file into 8 MB chunks and PUTs them directly to the private S3 ingest bucket with short-lived signed URLs. `/api/analyze-uploaded` persists the S3-backed request; ECS downloads it privately, normalizes the first `0:00–3:00` to H.264/AAC, and only then uploads that clip to Gemini. This avoids routing a 275 MB phone video through CloudFront, ALB and ECS as one viewer request and makes HEVC phone footage suitable for analysis.
+A key user-facing problem is analysis latency on real sparring files. The durable path separates the large browser upload from analysis: the browser splits the file into 8 MB chunks and PUTs them directly to the private S3 ingest bucket with short-lived signed URLs. `/api/analyze-uploaded` persists the S3-backed request; the ECS durable worker claims it from DynamoDB, downloads the private original and creates a fast `0:00–3:00` stream-copy clip without CPU-heavy HEVC transcoding before uploading that clip to Gemini. The original remains intact in S3. This avoids routing a 275 MB phone video through CloudFront, ALB and ECS as one viewer request and avoids the previous HEVC Main10 CPU bottleneck.
 
 Gemini file preparation polling allows up to 8 minutes for large files. The UI displays an estimate before starting, elapsed time and progressive stages such as upload/preparation, fighter identification, pattern reading, opponent/strategy analysis and report construction instead of appearing frozen.
 
-For the HTTPS mobile entry point, `/api/analyze-uploaded?async=1` returns a durable job ID immediately. The browser treats that initial `{ id, status }` payload as a job descriptor—not as a final report—and polls the same route for `queued`, `preparing`, `coaching`, `complete` or `failed`. DynamoDB stores the payload, status, report and two-day TTL; a conditional worker lease lets a later poll resume an expired job after an ECS restart without a second video upload.
+For the HTTPS mobile entry point, `/api/analyze-uploaded?async=1` returns a durable job ID immediately. The browser treats that initial `{ id, status }` payload as a job descriptor—not as a final report—and polls the same route for `queued`, `preparing`, `coaching`, `complete` or `failed`. DynamoDB stores the payload, status, report and two-day TTL; an in-process ECS worker scans every five seconds and uses conditional leases so queued or expired work continues after browser disconnects and can be reclaimed after an ECS restart without a second video upload.
 
 Production verification on 2026-08-29 exercised the browser-equivalent path against the public AWS beta: `/api/health` returned `analysisReady: true` and `geminiConfigured: true`; `/api/upload` returned a valid Gemini file reference; `/api/analyze-uploaded` returned a real Gemini report with `usedInReport: true`, non-empty priorities and four timestamp evidence items. This materially fixes the previous long-video request/memory path for the beta.
 
-Release verification still must exercise the exact HEVC 275 MB Android/CloudFront flow, every JPEG evidence frame and PDF. A future hardening phase can add an independent queue/worker and reload-visible job history; the present DynamoDB lease recovers a job when a browser continues polling after a task restart.
+Beta release gate passed on 2026-08-31: Web MVP CI passed typecheck, production build, shared-backend runtime QA, desktop/mobile Playwright journeys and Docker build; AWS deploy passed OIDC, ECR, CloudFront, ECS stabilization and public HTTPS health; the deployed Gemini red-gloves smoke returned a real report with `usedInReport: true` and four evidence items. The representative 275 MB HEVC regression established the durable worker/stream-copy design; broader beta testing should continue collecting real-device evidence/PDF regressions before any general-public launch.
 
 ## 8. Evidence and PDF
 Timestamp evidence must be reproducible against the same uploaded local video. Clicking evidence seeks the preview to the parsed `MM:SS` time and attempts playback after the seek completes.

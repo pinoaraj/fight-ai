@@ -1,60 +1,59 @@
 # Fight AI — Project continuity guide
 
-This repository is the source of truth for continuing Fight AI from Codex, OpenCode, Claude, Google AI Studio or another coding agent. Read this file first, then the linked product and handoff documents before changing code.
-
 ## Canonical starting point
 
 - Repository: `pinoaraj/fight-ai`
-- Web and shared contract branch: `web/mvp`
+- Web/shared branch: `web/mvp`
 - Android QA branch: `qa/cloud-android`
+- Web PR: #2
+- Current status: `docs/STATUS_2026-08-31.md`
 - Product authority: `docs/GRAPIFY_BETA_SPEC.md`
-- Detailed operational handoff: `docs/CODEX_HANDOFF_2026-08-29.md`
+- Operational handoff: `docs/CODEX_HANDOFF_2026-08-29.md`
 - Repository rules: `AGENTS.md`
+- Controlled beta URL: https://d1ga34t3tjgix2.cloudfront.net
 
-Do not restart either client or invent a second report schema. Keep Android and web aligned around the same fighter identity, provider attribution and evidence-first report contract.
+Do not restart either client or create a second analysis schema.
 
-## Current web behavior
+## Web architecture now
 
-1. The browser splits the selected sparring into 8 MB parts and uploads them directly to the private S3 ingest bucket through short-lived signed URLs. The large MP4 never travels through CloudFront/ALB/ECS as a single viewer request.
-2. The browser starts `/api/analyze-uploaded?async=1`, receives a durable job descriptor (`id`, `status`) and polls for the final report. ECS reads the private S3 object and streams it to Gemini.
-3. A report credits Gemini only with `provider: "Gemini"` and `usedInReport: true`.
-4. HEVC/Main10 or another browser-incompatible codec uses server-side FFmpeg JPEG captures for fighter selection and evidence. It must never require the athlete to select a fighter from a black video surface.
-5. PDF download remains disabled until every report timestamp has a real evidence image. The report and PDF must never substitute black boxes or fabricated images for evidence.
-6. Fight AI accepts one round per request. The product states “hasta 3 minutos”; ECS normalizes the private S3 original to H.264/AAC from `0:00–3:00` before Gemini sees it. Do not move that cut to the phone because HEVC/Main10 devices cannot reliably decode or export it.
+1. Browser uploads in 8 MB parts directly to the private S3 ingest bucket using signed multipart URLs.
+2. Browser starts `/api/analyze-uploaded?async=1` and receives a durable job ID.
+3. DynamoDB persists payload/status/report with TTL and lease fields.
+4. The ECS worker scans every 5 seconds, claims queued/expired work and continues independently of the browser HTTP lifecycle.
+5. Worker downloads the private original and uses FFmpeg stream copy for the first 0:00–3:00; do not default back to CPU-heavy HEVC Main10 transcoding.
+6. The temporary round clip is uploaded to Gemini; UI phases map to downloading → converting/cutting → uploading → preparing → coaching.
+7. Gemini is credited only when `provider: "Gemini"` and `usedInReport: true`.
+8. HEVC/browser-incompatible preview/evidence uses real server-extracted JPEGs. PDF remains blocked until real evidence images are ready.
+9. Original upload remains private and intact; a deploy/restart must reuse the same S3 object/job instead of requesting a second upload.
 
-## Handoff status — 2026-08-29
+## Verified beta gate — 2026-08-31
 
-AWS resources for the durable large-video path exist: private encrypted S3 bucket `fight-ai-video-ingest-379549361550-sa-east-1` (two-day lifecycle), DynamoDB table `fight-ai-analysis-jobs`, and ECS task role `FightAIEcsTaskRole`. The bootstrap is `infra/aws/bootstrap-large-video-ingestion.ps1`.
+- Web MVP CI #297 and #298: PASS.
+- Typecheck/build/runtime QA: PASS.
+- Playwright desktop + mobile: PASS.
+- Production Docker build: PASS.
+- AWS deploy #82: PASS.
+- CloudFront HTTPS: PASS.
+- ECS stabilization: PASS.
+- Public health: `geminiConfigured=true`, `analysisReady=true`.
+- Deployed red-gloves Gemini smoke: PASS, `usedInReport=true`, 4 evidence items.
+- Streaming production smoke on durable uploaded-reference path: PASS.
 
-The web client uses multipart S3 upload and `/api/analyze-uploaded` persists every job in DynamoDB. A conditional lease makes an active job recoverable after an ECS restart: a later poll can claim an expired lease and resume it without a second video upload. Jobs expire after two days. S3 CORS is applied for the CloudFront mobile origin and DynamoDB TTL is enabled. The remaining release gate is the exact HEVC 275 MB Android/CloudFront journey through report evidence and PDF. Do not give public-mobile green light until that journey is successful.
+Public controlled-beta URL: https://d1ga34t3tjgix2.cloudfront.net
 
-## Deploy and mobile access
+## CloudFront note
 
-The deployment path is GitHub Actions OIDC → ECR → ECS Fargate → ALB origin → CloudFront HTTPS. GitHub Actions workflow: `.github/workflows/web-aws-deploy.yml`.
+The existing distribution is healthy. AWS reports the distribution is not eligible for the optional CloudFront FREE-plan subscription. The workflow therefore treats plan enrollment as optional and continues to verify HTTPS. Do not confuse FREE-plan eligibility with HTTPS readiness.
 
-- Use the generated `https://*.cloudfront.net` domain for Android and iOS.
-- The ALB HTTP URL is an origin/debug endpoint only; do not share it as the mobile product URL.
-- CloudFront permissions are applied to `FightAIGitHubDeployRole` by `infra/aws/grant-cloudfront-https-permissions.ps1` from an authorized AWS profile. Re-run it whenever the tracked policy changes, including its `freetier:GetAccountPlanState` eligibility permission.
-- Never commit or expose AWS credentials, Gemini keys, uploaded sparring videos or access tokens.
+## Release discipline
 
-## Required verification before release
+Before changing preview/upload/jobs/evidence/PDF/provider behavior, preserve:
+- fighter identity anchor + descriptors + temporal continuity;
+- no fabricated counts/percentages/speed/accuracy;
+- observation → pattern → consequence → correction → drill → timestamp evidence;
+- truthful provider attribution;
+- durable retry without re-upload;
+- real evidence frames in PDF;
+- automated CI plus deployed smoke for release-affecting changes.
 
-```powershell
-npm run typecheck
-npm run build
-```
-
-For changes that affect upload, analysis, frame extraction or PDF, also validate a real video workflow: visible fighter selection, async report completion, evidence JPEGs for every report timestamp, and PDF export only after the image counter completes. Check the latest GitHub Actions deploy and `/api/health` before sharing a public URL.
-
-## Known beta limitations and next hardening work
-
-- Async job state is stored in ECS process memory: it does not survive a container restart or browser reload.
-- The current upload/reference flow is suitable for the beta but needs durable ingestion, queue and job storage before a broad public launch.
-- Replace the temporary CloudFront domain with the product domain and ACM certificate when a brand domain is chosen.
-- Keep coaching factual: no invented punch counts, accuracy, speed, percentages or unsupported certainty.
-
-## Safe task prompt for a new coding agent
-
-Use this as the first instruction in a new session:
-
-> Work in `pinoaraj/fight-ai` on branch `web/mvp`. Read `AGENTS.md`, `docs/PROJECT_CONTINUITY.md`, `docs/GRAPIFY_BETA_SPEC.md`, and `docs/CODEX_HANDOFF_2026-08-29.md` before editing. Preserve the shared Android/web report contract, OIDC deployment, truthful Gemini attribution, HEVC-compatible evidence JPEGs, and PDF image gate. Inspect the latest GitHub Actions deployment before making changes. Do not expose secrets or add fabricated analysis metrics.
+Controlled beta is approved; broad public launch is not. Continue real-device HEVC and PDF regressions and add observability before widening access.

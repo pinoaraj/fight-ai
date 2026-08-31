@@ -1,30 +1,54 @@
-# Fight AI Web — long-video HTTP 502 production hardening
+# Fight AI Web — long-video production hardening
 
-Date: 2026-08-29
+Original incident: 2026-08-29  
+Final beta-ready verification: 2026-08-31  
 Branch: `web/mvp`
 
 ## Incident
-A real browser analysis on the public beta returned an upstream HTML HTTP 502 and the UI surfaced: “El servidor interrumpió el análisis”. The existing release smoke used a very small real sparring proof clip, so it proved Gemini attribution and end-to-end connectivity but did not exercise the long-running request/resource profile of a normal user recording.
 
-## Most likely failure modes addressed
-The public beta still performs direct Gemini fallback synchronously when `FIGHT_AI_API_URL` is not configured. In that path Next.js parses multipart video data and the process can hold significant memory while Gemini Files processing and coaching generation run. The previous AWS runtime used only 0.5 vCPU / 1 GiB and the ALB idle timeout was 300 seconds. Either a long Gemini round-trip reaching the ALB timeout or memory pressure could terminate the upstream connection as an HTML 502 before Next.js could return its JSON error.
+Real phone footage exposed three separate weaknesses in the early web path:
+1. long synchronous viewer requests could be interrupted;
+2. 275 MB HEVC Main10 decoding/transcoding was too CPU-expensive inside ECS;
+3. work tied to a short HTTP request could stop making progress after the request/deploy lifecycle changed.
 
-## Runtime hardening deployed
-Commit `beac9e8ef7b0fb8e1c23cb4bb7574606cc357fad` changed the AWS web runtime to:
-- ALB idle timeout: 300 s → 1200 s;
-- ECS Fargate task: 0.5 vCPU / 1 GiB → 1 vCPU / 3 GiB;
-- Node heap ceiling: `--max-old-space-size=2304`;
-- GitHub deploy job timeout: 35 min → 45 min;
-- deployed Gemini smoke client timeout: 240 s → 600 s.
+## Final design
 
-GitHub Actions run `33263019255` passed OIDC, ECR push, ALB provisioning, ECS service stabilization, public `/api/health`, and the real Gemini `/api/analyze` smoke after these changes.
+The controlled beta no longer depends on the old synchronous large-video path.
 
-## What this does and does not prove
-This hardening removes the known 5-minute ALB ceiling and gives the synchronous beta path materially more headroom. The browser-facing uploaded-video route now additionally offers an asynchronous job wrapper: it returns a job ID, polls short status requests and keeps Gemini preparation/coaching off the CloudFront viewer request. This enables the HTTPS mobile entry point without CloudFront cutting a long POST response. It does **not** replace the planned durable production architecture: jobs are currently process-memory state and must move to private persistent ingestion, queue storage and reload-safe job IDs.
+- Browser uploads 8 MB multipart chunks directly to private S3.
+- DynamoDB persists an async job ID, payload, status, result, TTL and lease.
+- An ECS worker scans every 5 seconds and claims queued/expired jobs.
+- Worker downloads the private original.
+- FFmpeg creates only the first 0:00–3:00 using stream copy; the default path does not re-encode HEVC Main10 pixels.
+- Temporary clip goes to Gemini.
+- Job phases are visible as downloading → cutting/converting → uploading → preparing → coaching.
+- ECS restart/deploy recovery reuses the same S3 object and job ID.
+- The original S3 video remains intact and private.
+- UI retry must not trigger a second upload.
 
-## Release/QA rule
-Do not treat the tiny Gemini proof clip as sufficient evidence for large-video reliability. Before general public launch, add and pass a representative large sparring upload/report E2E regression, plus CloudWatch task/application diagnostics. If another real user upload returns an upstream 502 after this hardening, prioritize async ingestion/streaming upload rather than increasing timeouts or memory again.
+## Runtime hardening retained
 
-## Per-run timing instrumentation
+- ECS Fargate: 2 vCPU / 4 GB
+- Node heap: approximately 3328 MB
+- ALB idle timeout: 1200 seconds
+- GitHub OIDC deploy
+- ECR private image
+- CloudFront HTTPS public entry
 
-The web client records browser upload duration and original/processed byte counts for the direct Gemini flow. The streaming upload response records Gemini upload duration; `/api/analyze-uploaded` records Gemini file-preparation and coaching-generation durations. The completed report shows the relevant timing summary, using `no medido` rather than inventing a value for stages not yet implemented (preprocessing remains `0` and one original clip is used). These measurements establish the baseline for the next architectural step: candidate-moment detection and short original clips rather than raising timeouts again.
+These are safety margins, not substitutes for durable processing.
+
+## Verification
+
+2026-08-31:
+- Web MVP CI #297/#298 passed desktop/mobile virtual agents and Docker build.
+- AWS deploy #82 passed OIDC, ECR, CloudFront, ECS stabilization and public HTTPS verification.
+- Public beta: https://d1ga34t3tjgix2.cloudfront.net
+- /api/health returned `geminiConfigured=true` and `analysisReady=true`.
+- Deployed red-gloves Gemini smoke returned `usedInReport=true` with 4 timestamp evidence items.
+- Existing streaming production smoke is green on the durable uploaded-reference path.
+
+## Regression rule
+
+Do not restore full H.264 transcoding as the normal HEVC preparation step. If a source cannot be stream-copied, return an explicit preparation failure or implement a narrowly-scoped fallback with its own timeout/QA. Never hide multi-minute CPU work behind a generic “preparing” status.
+
+Controlled beta is green; broad production still requires continued real-device regression and observability.

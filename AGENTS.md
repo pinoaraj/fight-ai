@@ -33,3 +33,12 @@ For changes to `web/mvp`, keep TypeScript/build, desktop/mobile Playwright agent
 ## Android gates
 
 For changes to `qa/cloud-android`, preserve the existing emulator/bootstrap regression path and crash-dialog handling. Prefer automated emulator QA over manual-only testing.
+
+
+## Controlled beta status
+
+As of 2026-08-31, web controlled-beta gates are green. Public HTTPS beta: https://d1ga34t3tjgix2.cloudfront.net
+
+Canonical large-video behavior is private multipart S3 → DynamoDB durable job → ECS worker → 0:00–3:00 FFmpeg stream copy → Gemini. Do not regress to process-memory-only jobs, request-lifecycle processing or full HEVC transcoding as the default.
+
+For release-affecting web changes, require green Web MVP CI and the applicable AWS deploy/production smoke before declaring beta-ready again.

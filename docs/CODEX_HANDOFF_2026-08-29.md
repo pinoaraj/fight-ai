@@ -134,3 +134,20 @@ The next Codex pass should align Android with the web contract instead of creati
 5. Compare `qa/cloud-android` contract/UI against web and converge shared semantics without rewriting working Android QA.
 6. Keep documentation synchronized with behavior in the same change.
 7. Use GitHub OIDC for AWS deployments; only establish a local AWS SSO/profile session if a task truly requires direct AWS CLI access.
+
+
+## Beta-ready checkpoint — 2026-08-31
+
+Web beta is cleared for controlled beta testing.
+
+Verified:
+- Web MVP CI #297/#298 passed TypeScript, production build, shared-backend runtime QA, desktop/mobile Playwright agents and Docker build.
+- Durable S3 + DynamoDB + ECS-worker flow is the canonical large-video architecture.
+- HEVC Main10 preparation uses a fast 0:00–3:00 stream copy; do not restore full H.264 transcoding as the default.
+- AWS deploy #82 passed GitHub OIDC, ECR, CloudFront provisioning, ECS stabilization and public runtime verification.
+- Public beta URL: https://d1ga34t3tjgix2.cloudfront.net
+- Public /api/health returned geminiConfigured=true and analysisReady=true.
+- Deployed red-gloves Gemini smoke returned provider=Gemini, usedInReport=true and 4 timestamp evidence items.
+- CloudFront FREE-plan enrollment is optional and unavailable for the current distribution; HTTPS itself is healthy and must not be disabled because that optional subscription is unavailable.
+
+Controlled beta rule: keep PR #2 open until beta feedback is triaged; do not merge a regression while CI/deploy gates are red.
