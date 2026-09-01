@@ -75,7 +75,7 @@ async function updateJob(id: string, status: AnalysisJob['status'], extra: { rep
   };
   const sets = ['#status = :status', 'updatedAt = :updatedAt'];
   if (extra.report) { values[':report'] = { S: JSON.stringify(extra.report) }; sets.push('report = :report'); }
-  if (extra.error) { values[':error'] = { S: extra.error.slice(0, 1200) }; sets.push('error = :error'); }
+  if (extra.error) { names['#error'] = 'error'; values[':error'] = { S: extra.error.slice(0, 1200) }; sets.push('#error = :error'); }
   if (extra.clearLease) { values[':lease'] = { N: '0' }; sets.push('leaseExpiresAt = :lease'); }
   await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { jobId: { S: id } }, UpdateExpression: `SET ${sets.join(', ')}`, ExpressionAttributeNames: names, ExpressionAttributeValues: values }));
 }
