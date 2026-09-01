@@ -81,7 +81,7 @@ The previous long-video path was hardened after a real 275 MB HEVC Main10 regres
 
 Current design:
 - the original private S3 object remains untouched;
-- server preparation uses a direct 0:00–3:00 stream copy with FFmpeg instead of CPU-heavy H.264 transcoding;
+- server preparation uses a direct 0:00–3:00 stream copy with FFmpeg by default; an oversized high-bitrate clip takes an explicit compact 540p H.264 fallback so Gemini receives no more than two serial uploads;
 - the UI exposes durable phases: downloading, converting/cutting, uploading to Gemini, preparing and coaching;
 - asynchronous analysis jobs are persisted in DynamoDB with leases;
 - an in-process ECS worker scans DynamoDB every 5 seconds and claims expired/queued work, so analysis no longer depends on the lifetime of the browser HTTP request;

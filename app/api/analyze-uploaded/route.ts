@@ -164,6 +164,33 @@ function makeThreeMinuteClip(inputPath: string, outputPath: string) {
   });
 }
 
+/**
+ * Gemini Files rate-limits repeated large HEVC uploads.  Preserve the fast
+ * stream-copy path above, but when that clip is still too large, make one
+ * deliberately small, browser-compatible fallback for the analysis worker.
+ * The private source in S3 is never modified.
+ */
+function makeCompactCompatibleClip(inputPath: string, outputPath: string) {
+  return new Promise<void>((resolve, reject) => {
+    const args = [
+      '-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180',
+      '-map', '0:v:0?', '-map', '0:a?', '-vf', 'scale=-2:540',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '30', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', outputPath,
+    ];
+    const encoder = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('La conversión compatible del round tardó demasiado.')); }, 4 * 60 * 1000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible para convertir el round.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo convertir el round a MP4 compatible.'));
+    });
+  });
+}
+
 async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: string, updateJob?: (status: AnalysisJob['status']) => void | Promise<void>) {
   const key = val(data, 's3Key');
   if (!key || !key.startsWith('uploads/') || !bucket) throw new Error('Referencia de video no válida.');
@@ -449,14 +476,23 @@ async function prepareGeminiSegments(
 
     await updateJob?.('converting');
     await makeThreeMinuteClip(inputPath, clipPath);
-    const clip = await stat(clipPath);
+    let clip = await stat(clipPath);
     if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
 
-    // Keep HEVC pieces short/small so Gemini Files can prepare them in parallel.
-    // Around 28 MB keeps a typical 3-minute mobile round to <=10 pieces.
-    const targetBytes = 28 * 1024 * 1024;
-    const maxBytes = 34 * 1024 * 1024;
-    const count = Math.max(1, Math.min(12, Math.ceil(clip.size / targetBytes)));
+    // Stream copy stays the normal path. A large phone HEVC round is the
+    // exception: compact it once instead of creating 8-12 Gemini uploads that
+    // contend for provider capacity and leave the user waiting indefinitely.
+    const compactThreshold = 45 * 1024 * 1024;
+    if (clip.size > compactThreshold) {
+      await unlink(clipPath);
+      await makeCompactCompatibleClip(inputPath, clipPath);
+      clip = await stat(clipPath);
+      if (!clip.size) throw new Error('El MP4 compatible quedó vacío.');
+    }
+
+    const targetBytes = 45 * 1024 * 1024;
+    const maxBytes = 55 * 1024 * 1024;
+    const count = Math.max(1, Math.min(2, Math.ceil(clip.size / targetBytes)));
     if (clip.size / count > maxBytes) throw new Error('El video supera la ruta segmentada sin recodificar.');
 
     const duration = 180 / count;
@@ -477,7 +513,7 @@ async function prepareGeminiSegments(
     }
 
     await updateJob?.('uploading');
-    const uploaded = await mapWithConcurrency(local, 4, async (segment, index) => {
+    const uploaded = await mapWithConcurrency(local, 1, async (segment, index) => {
       const ref = await uploadLocalSegmentToGemini(
         apiKey,
         segment.path,
@@ -488,7 +524,7 @@ async function prepareGeminiSegments(
     });
 
     await updateJob?.('preparing');
-    await mapWithConcurrency(uploaded, 8, async (segment) => {
+    await mapWithConcurrency(uploaded, 1, async (segment) => {
       await waitGeminiFileActive(apiKey, segment.fileName, segment.state);
       return true;
     });
@@ -697,7 +733,7 @@ async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (stat
 
       await updateJob?.('coaching');
       const analysisStartedAt = Date.now();
-      const parts = await mapWithConcurrency(segments, 5, async (segment, index) =>
+      const parts = await mapWithConcurrency(segments, 1, async (segment, index) =>
         generateCoachJson(
           apiKey,
           buildSegmentPrompt(data, index, segments.length, segment.offset, segment.duration),
