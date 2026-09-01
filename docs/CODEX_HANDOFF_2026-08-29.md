@@ -41,7 +41,7 @@ Current beta architecture: GitHub Actions OIDC → Amazon ECR → ECS Fargate �
 - ALB origin/debug URL: `http://fight-ai-web-alb-2053895073.sa-east-1.elb.amazonaws.com`
 - Public mobile URL: the `https://*.cloudfront.net` domain printed by the current deploy workflow. The workflow subscribes it to the CloudFront FREE plan with its required WAF ACL; do not share the ALB HTTP URL with Android/iOS users.
 - ALB idle timeout for long analysis: 1200 seconds
-- Current ECS task sizing for web beta: 1 vCPU / 3 GB RAM; Node heap capped near 2304 MB
+- Current ECS task sizing for web beta: 2 vCPU / 4 GB RAM; Node heap capped near 3328 MB
 
 For normal deployment, Codex should change code/workflows and let GitHub Actions assume `FightAIGitHubDeployRole` through OIDC. No static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` belongs in the repository.
 
@@ -160,3 +160,8 @@ Controlled beta rule: keep PR #2 open until beta feedback is triaged; do not mer
 The durable worker keeps Gemini Files as the normal transport. If the resumable Files upload itself is saturated (`429/503`) before a reusable file reference exists, the worker now falls back to the existing compact inline Interactions path for the same private S3 source and 0:00–3:00 analysis window. This prevents repeated `uploading` loops from consuming the full retry budget while preserving the original upload, truthful Gemini attribution, timestamp evidence, and bounded durable retries. Do not replace the normal Files path with inline-by-default for large sources without a new regression pass.
 
 Production smoke now waits for three consecutive healthy responses from the expected build SHA and retries transient network resets during ECS rollout. A single `connection reset by peer` immediately after the new task becomes visible must not be treated as an analysis failure; the smoke still fails on persistent network/runtime errors or an unsuccessful durable Gemini report.
+
+
+## Final validation 2026-09-01
+
+Final documented web HEAD passed Web MVP CI #432/#433. The production runtime change immediately before that documentation checkpoint passed AWS Deploy #137 and Web Streaming Production Smoke #75. The public beta remains https://d1ga34t3tjgix2.cloudfront.net and controlled-beta status remains GREEN.
