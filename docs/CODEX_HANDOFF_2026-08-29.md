@@ -158,3 +158,5 @@ Controlled beta rule: keep PR #2 open until beta feedback is triaged; do not mer
 ## Checkpoint 2026-09-01 — Gemini Files capacity fallback
 
 The durable worker keeps Gemini Files as the normal transport. If the resumable Files upload itself is saturated (`429/503`) before a reusable file reference exists, the worker now falls back to the existing compact inline Interactions path for the same private S3 source and 0:00–3:00 analysis window. This prevents repeated `uploading` loops from consuming the full retry budget while preserving the original upload, truthful Gemini attribution, timestamp evidence, and bounded durable retries. Do not replace the normal Files path with inline-by-default for large sources without a new regression pass.
+
+Production smoke now waits for three consecutive healthy responses from the expected build SHA and retries transient network resets during ECS rollout. A single `connection reset by peer` immediately after the new task becomes visible must not be treated as an analysis failure; the smoke still fails on persistent network/runtime errors or an unsuccessful durable Gemini report.
