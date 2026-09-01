@@ -27,7 +27,7 @@ for (;;) {
     const heart = setInterval(() => { const tick = Date.now(); void dynamo.send(new UpdateItemCommand({ TableName: table, Key: { jobId: { S: id } }, UpdateExpression: 'SET updatedAt = :now, leaseExpiresAt = :lease', ConditionExpression: 'leaseOwner = :owner', ExpressionAttributeValues: { ':now': { N: String(tick) }, ':lease': { N: String(tick + 720000) }, ':owner': { S: owner } } })).catch(() => {}); }, 20000);
     const response = await fetch(`${endpoint}/api/analyze-uploaded?workerJob=${encodeURIComponent(id)}&workerOwner=${encodeURIComponent(owner)}`);
     clearInterval(heart);
-    if (!response.ok) console.error(`Fight AI worker request failed: ${response.status}`);
+    if (!response.ok) console.error(`Fight AI worker request failed: ${response.status} ${await response.text()}`);
     await pause(response.ok ? 1500 : 5000);
   } catch (error) {
     console.error('Fight AI durable worker error', error);
