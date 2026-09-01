@@ -37,8 +37,10 @@ For changes to `qa/cloud-android`, preserve the existing emulator/bootstrap regr
 
 ## Controlled beta status
 
-As of 2026-08-31, web controlled-beta gates are green. Public HTTPS beta: https://d1ga34t3tjgix2.cloudfront.net
+As of 2026-09-01, web controlled-beta gates are green. Public HTTPS beta: https://d1ga34t3tjgix2.cloudfront.net
 
-Canonical large-video behavior is private multipart S3 → DynamoDB durable job → ECS worker → 0:00–3:00 FFmpeg stream copy → Gemini. Do not regress to process-memory-only jobs, request-lifecycle processing or full HEVC transcoding as the default.
+Canonical large-video behavior is private multipart S3 → DynamoDB durable job → ECS worker → 0:00–3:00 FFmpeg stream copy → Gemini. Gemini Files is primary; compact inline Interactions is only a capacity fallback when Files upload cannot create a reusable reference. Do not regress to process-memory-only jobs, request-lifecycle processing, repeated full re-uploads or full HEVC transcoding as the default.
 
 For release-affecting web changes, require green Web MVP CI and the applicable AWS deploy/production smoke before declaring beta-ready again.
+
+Latest verified web gates: Web MVP CI #432/#433 PASS, AWS Deploy #137 PASS, Production Streaming Smoke #75 PASS. Production smoke must tolerate transient ECS rollout resets but still fail on persistent runtime/network errors or an unsuccessful durable Gemini report.
