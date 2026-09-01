@@ -153,3 +153,8 @@ Verified:
 - CloudFront FREE-plan enrollment is optional and unavailable for the current distribution; HTTPS itself is healthy and must not be disabled because that optional subscription is unavailable.
 
 Controlled beta rule: keep PR #2 open until beta feedback is triaged; do not merge a regression while CI/deploy gates are red.
+
+
+## Checkpoint 2026-09-01 — Gemini Files capacity fallback
+
+The durable worker keeps Gemini Files as the normal transport. If the resumable Files upload itself is saturated (`429/503`) before a reusable file reference exists, the worker now falls back to the existing compact inline Interactions path for the same private S3 source and 0:00–3:00 analysis window. This prevents repeated `uploading` loops from consuming the full retry budget while preserving the original upload, truthful Gemini attribution, timestamp evidence, and bounded durable retries. Do not replace the normal Files path with inline-by-default for large sources without a new regression pass.
