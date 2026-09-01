@@ -36,8 +36,9 @@ jobs:
           URL="https://d1ga34t3tjgix2.cloudfront.net"
 
           READY=0
+          STABLE=0
           for ATTEMPT in $(seq 1 90); do
-            if curl --fail --max-time 15 -sS "$URL/api/health" > /tmp/health.json; then
+            if curl --fail --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 -sS "$URL/api/health" > /tmp/health.json; then
               export EXPECTED_SHA="$GITHUB_SHA"
               if python - <<'PY'
           import json, os, sys
@@ -47,10 +48,16 @@ jobs:
           sys.exit(0 if ok else 1)
           PY
               then
-                READY=1
-                break
+                STABLE=$((STABLE + 1))
+                if [ "$STABLE" -ge 3 ]; then
+                  READY=1
+                  break
+                fi
+                sleep 5
+                continue
               fi
             fi
+            STABLE=0
             sleep 10
           done
           if [ "$READY" -ne 1 ]; then
@@ -67,7 +74,7 @@ jobs:
           PY
           test -s /tmp/fight-ai-durable-smoke.mp4
 
-          curl --fail --max-time 30 -sS             -H 'Content-Type: application/json'             --data '{"action":"start","name":"fight-ai-durable-smoke.mp4","type":"video/mp4"}'             "$URL/api/direct-upload" > /tmp/start.json
+          curl --fail --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS             -H 'Content-Type: application/json'             --data '{"action":"start","name":"fight-ai-durable-smoke.mp4","type":"video/mp4"}'             "$URL/api/direct-upload" > /tmp/start.json
 
           python - <<'PY'
           import json
@@ -86,7 +93,7 @@ jobs:
           upload_id=open('/tmp/upload_id').read()
           json.dump({'action':'sign','key':key,'uploadId':upload_id,'partNumber':1},open('/tmp/sign-request.json','w'))
           PY
-          curl --fail --max-time 30 -sS             -H 'Content-Type: application/json'             --data-binary @/tmp/sign-request.json             "$URL/api/direct-upload" > /tmp/sign.json
+          curl --fail --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS             -H 'Content-Type: application/json'             --data-binary @/tmp/sign-request.json             "$URL/api/direct-upload" > /tmp/sign.json
           python - <<'PY'
           import json
           data=json.load(open('/tmp/sign.json',encoding='utf-8'))
@@ -95,7 +102,7 @@ jobs:
           PY
           SIGNED_URL=$(cat /tmp/signed_url)
 
-          curl --fail --max-time 120 -sS -D /tmp/part-headers.txt -o /dev/null             -X PUT --data-binary @/tmp/fight-ai-durable-smoke.mp4 "$SIGNED_URL"
+          curl --fail --max-time 120 --retry 5 --retry-all-errors --retry-delay 2 -sS -D /tmp/part-headers.txt -o /dev/null             -X PUT --data-binary @/tmp/fight-ai-durable-smoke.mp4 "$SIGNED_URL"
           ETAG=$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {gsub("\r","",$2); print $2}' /tmp/part-headers.txt | tail -1)
           test -n "$ETAG"
 
@@ -109,7 +116,7 @@ jobs:
             'parts':[{'ETag':os.environ['ETAG'],'PartNumber':1}],
           },open('/tmp/complete.json','w'))
           PY
-          curl --fail --max-time 30 -sS             -H 'Content-Type: application/json'             --data-binary @/tmp/complete.json             "$URL/api/direct-upload" > /tmp/completed.json
+          curl --fail --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS             -H 'Content-Type: application/json'             --data-binary @/tmp/complete.json             "$URL/api/direct-upload" > /tmp/completed.json
 
           python - <<'PY'
           import json, os
@@ -129,7 +136,7 @@ jobs:
           json.dump(req,open('/tmp/job-request.json','w',encoding='utf-8'),ensure_ascii=False)
           PY
 
-          HTTP_CODE=$(curl --max-time 30 -sS -o /tmp/job-start.json -w '%{http_code}'             -H 'Content-Type: application/json'             --data-binary @/tmp/job-request.json             "$URL/api/analyze-uploaded?async=1")
+          HTTP_CODE=$(curl --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS -o /tmp/job-start.json -w '%{http_code}'             -H 'Content-Type: application/json'             --data-binary @/tmp/job-request.json             "$URL/api/analyze-uploaded?async=1")
           test "$HTTP_CODE" = "202"
           python - <<'PY'
           import json
@@ -141,7 +148,7 @@ jobs:
 
           DONE=0
           for ATTEMPT in $(seq 1 180); do
-            CODE=$(curl --max-time 20 -sS -o /tmp/job-status.json -w '%{http_code}' "$URL/api/analyze-uploaded?id=$JOB_ID")
+            CODE=$(curl --max-time 20 --retry 5 --retry-all-errors --retry-delay 2 -sS -o /tmp/job-status.json -w '%{http_code}' "$URL/api/analyze-uploaded?id=$JOB_ID")
             if [ "$CODE" = "200" ]; then
               DONE=1
               break
