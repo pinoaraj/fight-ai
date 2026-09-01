@@ -113,8 +113,8 @@ async function deferProviderRetry(id: string, status: AnalysisJob['status'], mes
   await dynamo.send(new UpdateItemCommand({
     TableName: tableName,
     Key: { jobId: { S: id } },
-    UpdateExpression: 'SET #status = :status, updatedAt = :updatedAt, leaseExpiresAt = :lease, error = :error REMOVE leaseOwner',
-    ExpressionAttributeNames: { '#status': 'status' },
+    UpdateExpression: 'SET #status = :status, updatedAt = :updatedAt, leaseExpiresAt = :lease, #error = :error REMOVE leaseOwner',
+    ExpressionAttributeNames: { '#status': 'status', '#error': 'error' },
     ExpressionAttributeValues: {
       ':status': { S: status },
       ':updatedAt': { N: String(now) },
