@@ -382,7 +382,10 @@ async function uploadLocalSegmentToGemini(apiKey: string, path: string, displayN
     cache: 'no-store',
     signal: AbortSignal.timeout(45_000),
   });
-  if (!start.ok) throw new Error(`Gemini no pudo iniciar un segmento (${start.status}).`);
+    if (!start.ok) {
+      if (start.status === 429 || start.status === 503) throw new Error('GEMINI_BUSY:Gemini está temporalmente ocupado; el análisis se reintentará automáticamente.');
+      throw new Error(`Gemini no pudo iniciar un segmento (${start.status}).`);
+    }
   const uploadUrl = start.headers.get('x-goog-upload-url');
   if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga para un segmento.');
 
@@ -399,7 +402,10 @@ async function uploadLocalSegmentToGemini(apiKey: string, path: string, displayN
     signal: AbortSignal.timeout(4 * 60 * 1000),
     duplex: 'half',
   } as RequestInit & { duplex: 'half' });
-  if (!uploaded.ok) throw new Error(`Gemini no pudo cargar un segmento (${uploaded.status}).`);
+    if (!uploaded.ok) {
+      if (uploaded.status === 429 || uploaded.status === 503) throw new Error('GEMINI_BUSY:Gemini está temporalmente ocupado; el análisis se reintentará automáticamente.');
+      throw new Error(`Gemini no pudo cargar un segmento (${uploaded.status}).`);
+    }
   const info = await uploaded.json() as { file?: { name?: string; uri?: string; state?: string } };
   const fileName = info.file?.name || '';
   const fileUri = info.file?.uri || '';
