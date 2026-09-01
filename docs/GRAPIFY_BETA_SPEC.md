@@ -248,3 +248,8 @@ The 2026-08-29 web beta upgrade is **materially fixed, validated and deployed fo
 6. CloudFront HTTPS provisioning is part of the deployment workflow; confirm its generated domain after the first deployment before sharing the public mobile URL.
 
 The current release candidate replaces the two-step viewer relay with direct multipart S3 and DynamoDB-backed jobs. S3 CORS/TTL and the ECS deployment were verified on 2026-08-31; an actual CloudFront CORS preflight returned HTTP 200 and a durable HEVC job was reclaimed after lease expiry without re-upload. It is not release-approved until the exact HEVC Android/CloudFront report and image-bearing PDF journey pass.
+
+
+## Checkpoint 2026-09-01 — Gemini Files capacity fallback
+
+The durable worker keeps Gemini Files as the normal transport. If the resumable Files upload itself is saturated (`429/503`) before a reusable file reference exists, the worker now falls back to the existing compact inline Interactions path for the same private S3 source and 0:00–3:00 analysis window. This prevents repeated `uploading` loops from consuming the full retry budget while preserving the original upload, truthful Gemini attribution, timestamp evidence, and bounded durable retries. Do not replace the normal Files path with inline-by-default for large sources without a new regression pass.
