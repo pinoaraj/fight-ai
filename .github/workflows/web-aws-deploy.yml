@@ -1,4 +1,5 @@
 name: Web AWS Deploy
+# The analysis worker is deployed as a separate ECS service and writes CloudWatch logs.
 
 on:
   workflow_dispatch:
