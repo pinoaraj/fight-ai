@@ -2,29 +2,29 @@
 
 Web client for the Fight AI combat-sparring analysis platform.
 
-## Status — controlled beta ready (2026-08-31)
+## Status — controlled beta ready (2026-09-01)
 
 Canonical branch: `web/mvp`  
 PR: #2  
 Public HTTPS beta: https://d1ga34t3tjgix2.cloudfront.net
 
-The web beta is cleared for controlled beta testing. The release gate has passed:
-- TypeScript + Next.js production build;
-- shared-backend runtime QA;
-- Playwright desktop + Pixel-class mobile journeys;
-- real MP4 preview and fighter marking;
-- multipart private S3 upload;
-- durable DynamoDB job + ECS worker recovery;
-- Docker production build;
-- AWS GitHub OIDC deploy;
-- CloudFront HTTPS + ECS health;
-- deployed Gemini red-gloves smoke with `usedInReport=true` and timestamp evidence.
+The web beta is cleared for controlled beta testing. Latest validated baseline:
+- Web MVP CI #432/#433: PASS on the final documented HEAD;
+- TypeScript + Next.js production build: PASS;
+- shared-backend runtime QA: PASS;
+- Playwright desktop + Pixel-class mobile journeys: PASS;
+- production Docker build: PASS;
+- AWS GitHub OIDC deploy #137: PASS;
+- CloudFront HTTPS + ECS health: PASS;
+- Web Streaming Production Smoke #75: PASS;
+- real multipart S3 → durable DynamoDB job → ECS worker → Gemini → report flow: PASS;
+- truthful Gemini attribution with `usedInReport=true` and timestamp evidence: PASS.
 
 ## Current architecture
 
 Browser → signed multipart S3 upload → DynamoDB durable job → ECS worker → 0:00–3:00 stream-copy clip → Gemini → evidence-first coaching report.
 
-The original upload remains private and intact in S3. Long-running analysis does not depend on the browser request staying open. HEVC/Main10 is not fully transcoded by default.
+Gemini Files is the normal transport. If the resumable Files upload is capacity-limited before a reusable file reference exists, the worker falls back to the existing compact inline Interactions path for the same private S3 source. The original upload remains private and intact in S3. Long-running analysis does not depend on the browser request staying open. HEVC/Main10 is not fully transcoded by default.
 
 ## Product baseline
 
@@ -58,3 +58,7 @@ Android remains the cross-platform interaction/report-semantics baseline. Web mu
 Controlled testers may use the HTTPS CloudFront URL. Treat uploaded sparring as private user data. Do not commit videos, Gemini keys, AWS credentials, tokens or generated private evidence.
 
 A beta-ready build is not a general-public-production declaration. Continue real-device regressions, especially large HEVC files, evidence/PDF completeness and fighter identity continuity.
+
+## Latest checkpoint
+
+Validated on 2026-09-01: CI #432/#433 PASS, AWS Deploy #137 PASS and Production Streaming Smoke #75 PASS. Controlled beta remains GREEN. PR #2 stays open for beta feedback; do not merge a later regression while applicable CI/deploy/smoke gates are red.
