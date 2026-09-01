@@ -66,4 +66,6 @@ The latest validated web baseline adds two production hardenings without changin
 - Gemini Files is still primary, with compact inline Interactions fallback only when Files upload capacity (`429/503`) prevents creation of a reusable Gemini file reference.
 - The production smoke waits for three consecutive healthy responses from the expected build SHA and retries transient network resets during ECS task replacement.
 
-Validated runs: Web MVP CI #429/#430 PASS, AWS Deploy #137 PASS, Streaming Production Smoke #75 PASS. Continue from this baseline; do not revert to repeated full video re-uploads or treat a single rollout connection reset as an analysis failure.
+Validated runs: Web MVP CI #432/#433 PASS on the documented HEAD; runtime code baseline also passed #429/#430, AWS Deploy #137 PASS, Streaming Production Smoke #75 PASS. Continue from this baseline; do not revert to repeated full video re-uploads or treat a single rollout connection reset as an analysis failure.
+
+Current ECS sizing: 2 vCPU / 4 GB for the web task. Gemini model baseline: `gemini-3.6-flash` with `gemini-3.5-flash-lite` fallback. Keep PR #2 open during controlled beta feedback triage.
