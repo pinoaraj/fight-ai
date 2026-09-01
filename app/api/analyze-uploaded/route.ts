@@ -763,7 +763,50 @@ async function completeAnalysis(
     let fileName = val(data, 'fileName'); let fileUri = val(data, 'fileUri'); let mimeType = val(data, 'mimeType', 'video/mp4');
     if (!fileName || !fileUri) {
       const preprocessingStartedAt = Date.now();
-      const segments = await prepareGeminiSegments(data, apiKey, updateJob);
+      let segments: GeminiPreparedSegment[];
+      try {
+        segments = await prepareGeminiSegments(data, apiKey, updateJob);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (!message.startsWith('GEMINI_BUSY:')) throw error;
+
+        // Gemini Files has its own capacity limits. If the resumable Files
+        // transport is saturated, reuse the same private S3 source and send
+        // the compact 0:00–3:00 clip inline through Interactions instead of
+        // repeatedly re-uploading the athlete's video and burning the whole
+        // durable retry budget in the "uploading" phase.
+        const inline = await prepareInlineSegments(data, updateJob);
+        const preprocessingMs = Date.now() - preprocessingStartedAt;
+        try {
+          await updateJob?.('coaching');
+          const analysisStartedAt = Date.now();
+          const parts = await mapWithConcurrency(inline.segments, 1, async (segment, index) =>
+            generateCoachJsonInline(
+              apiKey,
+              buildSegmentPrompt(data, index, inline.segments.length, segment.offset, segment.duration),
+              segment.path,
+            )
+          );
+          const merged = mergeSegmentReports(parts, inline.segments.map(segment => segment.offset));
+          const analysisMs = Date.now() - analysisStartedAt;
+          return {
+            mode: 'real', provider: 'Gemini', usedInReport: true,
+            summary: merged.summary || 'Análisis completado con Gemini.',
+            strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
+            plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
+            timings: {
+              preprocessing_ms: preprocessingMs,
+              gemini_processing_ms: analysisMs,
+              analysis_ms: analysisMs,
+              total_ms: Date.now() - startedAt,
+              clip_count: inline.segments.length,
+            },
+          };
+        } finally {
+          await inline.cleanup();
+        }
+      }
+
       const preprocessingMs = Date.now() - preprocessingStartedAt;
       if (!segments.length) throw new Error('No se pudo preparar el round para análisis rápido.');
       if (segments.length === 1) {
