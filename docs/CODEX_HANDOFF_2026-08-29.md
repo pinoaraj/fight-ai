@@ -84,7 +84,7 @@ Current design:
 - server preparation uses a direct 0:00–3:00 stream copy with FFmpeg by default; an oversized high-bitrate clip takes an explicit compact 540p H.264 fallback so Gemini receives no more than two serial uploads;
 - the UI exposes durable phases: downloading, converting/cutting, uploading to Gemini, preparing and coaching;
 - asynchronous analysis jobs are persisted in DynamoDB with leases;
-- an in-process ECS worker scans DynamoDB every 5 seconds and claims expired/queued work, so analysis no longer depends on the lifetime of the browser HTTP request;
+- the dedicated ECS worker scans DynamoDB and claims expired/queued work; web request tasks must not scan or execute jobs, so analysis no longer depends on the browser HTTP request or on competing provider uploads;
 - deploy/restart recovery must reuse the same S3 object and job id; do not require the athlete to upload the MP4 again.
 
 The Playwright contract was updated on 2026-08-31 to match the durable GET envelope `{ status: "complete", report }` and the current preview status copy. Commit: `3f0421e2a14d0f57a10b92dc3f6046ae8a4073b5`.

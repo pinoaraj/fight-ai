@@ -896,14 +896,9 @@ async function runAnalysisWorker() {
   }
 }
 
-function startDurableAnalysisWorker() {
-  if (workerStarted || !tableName) return;
-  workerStarted = true;
-  void runAnalysisWorker();
-  setInterval(() => { void runAnalysisWorker(); }, 5000);
-}
-
-(globalThis as typeof globalThis & { __fightAiStartDurableWorker?: () => void }).__fightAiStartDurableWorker = startDurableAnalysisWorker;
+// Queue processing belongs exclusively to scripts/analysis-worker.mjs in the
+// dedicated ECS service. Starting a second scanner inside web request tasks
+// creates competing Gemini uploads during a deployment or browser poll.
 
 export async function POST(req: NextRequest) {
   try {
