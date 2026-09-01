@@ -131,6 +131,8 @@ Gemini file preparation polling allows up to 8 minutes for large files. A single
 
 When a compact single Gemini file has been prepared, its server-side reference is persisted with the durable job before coaching. A temporary Gemini capacity response therefore resumes coaching against that same prepared file instead of downloading and converting the athlete’s original video again.
 
+Gemini model compatibility is explicit: production uses `gemini-3.6-flash` with `gemini-3.5-flash-lite` as fallback. The retired `gemini-2.5-flash` family must not be restored. Provider-capacity retries use persistent exponential backoff and stop after five deferrals; historical smoke jobs must never form an infinite retry queue.
+
 For the HTTPS mobile entry point, `/api/analyze-uploaded?async=1` returns a durable job ID immediately. The browser treats that initial `{ id, status }` payload as a job descriptor—not as a final report—and polls the same route for `queued`, `preparing`, `coaching`, `complete` or `failed`. DynamoDB stores the payload, status, report and two-day TTL; an in-process ECS worker scans every five seconds and uses conditional leases so queued or expired work continues after browser disconnects and can be reclaimed after an ECS restart without a second video upload.
 
 Production verification on 2026-08-29 exercised the browser-equivalent path against the public AWS beta: `/api/health` returned `analysisReady: true` and `geminiConfigured: true`; `/api/upload` returned a valid Gemini file reference; `/api/analyze-uploaded` returned a real Gemini report with `usedInReport: true`, non-empty priorities and four timestamp evidence items. This materially fixes the previous long-video request/memory path for the beta.

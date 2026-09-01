@@ -52,6 +52,8 @@ If direct AWS CLI work is later required from a Codex local environment, use an 
 - Gemini runs server-side only.
 - `GEMINI_API_KEY` is supplied to the deployment as a secret; never expose it to browser/mobile code, logs, docs or commits.
 - Gemini may be credited in a report only when the runtime response has `provider: "Gemini"` and `usedInReport: true`.
+- Current production models are `gemini-3.6-flash` and fallback `gemini-3.5-flash-lite`; the previous 2.5 models return `404 NOT_FOUND` for this account.
+- Durable provider retries are bounded to five deferrals with exponential backoff so obsolete jobs cannot saturate the project quota indefinitely.
 - `FIGHT_AI_API_URL`, when configured, switches `/api/analyze` to the shared-backend adapter path.
 
 ### Safe diagnostics

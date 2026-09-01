@@ -95,7 +95,7 @@ function interactionOutputText(raw: unknown) {
 
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string) {
   const configured = process.env.GEMINI_MODEL?.trim();
-  const candidates = Array.from(new Set([configured || '', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.6-flash'].filter(Boolean)));
+  const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
     const maxAttempts = 2;

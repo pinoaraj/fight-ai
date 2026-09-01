@@ -30,7 +30,7 @@ type ReportPayload = {
 };
 type AnalysisJob = {
   id: string; status: 'queued' | 'downloading' | 'converting' | 'uploading' | 'preparing' | 'coaching' | 'complete' | 'failed'; updatedAt: number;
-  payload: UploadedAnalysisRequest; report?: ReportPayload; error?: string; leaseExpiresAt?: number;
+  payload: UploadedAnalysisRequest; report?: ReportPayload; error?: string; leaseExpiresAt?: number; retryCount?: number;
 };
 const region = process.env.AWS_REGION || 'sa-east-1';
 const tableName = process.env.FIGHT_AI_JOBS_TABLE || '';
@@ -57,6 +57,7 @@ function itemToJob(item: Record<string, AttributeValue> | undefined): AnalysisJo
       report: item.report?.S ? JSON.parse(item.report.S) as ReportPayload : undefined,
       error: item.error?.S,
       leaseExpiresAt: item.leaseExpiresAt?.N ? Number(item.leaseExpiresAt.N) : undefined,
+      retryCount: item.retryCount?.N ? Number(item.retryCount.N) : 0,
     };
   } catch { return null; }
 }
@@ -111,16 +112,33 @@ async function heartbeatJob(id: string) {
 async function deferProviderRetry(id: string, status: AnalysisJob['status'], message: string, delayMs = 45_000) {
   if (!tableName) return;
   const now = Date.now();
+  const stored = await dynamo.send(new GetItemCommand({
+    TableName: tableName,
+    Key: { jobId: { S: id } },
+    ProjectionExpression: 'retryCount',
+    ConsistentRead: true,
+  }));
+  const retryCount = Number(stored.Item?.retryCount?.N || 0);
+  if (retryCount >= 5) {
+    await updateJob(id, 'failed', {
+      error: 'Gemini no estuvo disponible después de varios intentos. Reintenta más tarde sin volver a subir el video.',
+      clearLease: true,
+    });
+    return;
+  }
+  const nextRetryCount = retryCount + 1;
+  const retryDelay = Math.min(15 * 60_000, Math.max(delayMs, 60_000 * (2 ** retryCount)));
   await dynamo.send(new UpdateItemCommand({
     TableName: tableName,
     Key: { jobId: { S: id } },
-    UpdateExpression: 'SET #status = :status, updatedAt = :updatedAt, leaseExpiresAt = :lease, #error = :error REMOVE leaseOwner',
+    UpdateExpression: 'SET #status = :status, updatedAt = :updatedAt, leaseExpiresAt = :lease, #error = :error, retryCount = :retryCount REMOVE leaseOwner',
     ExpressionAttributeNames: { '#status': 'status', '#error': 'error' },
     ExpressionAttributeValues: {
       ':status': { S: status },
       ':updatedAt': { N: String(now) },
-      ':lease': { N: String(now + delayMs) },
+      ':lease': { N: String(now + retryDelay) },
       ':error': { S: message.slice(0, 1200) },
+      ':retryCount': { N: String(nextRetryCount) },
     },
   }));
 }
@@ -640,9 +658,8 @@ async function generateCoachJsonInline(apiKey: string, prompt: string, path: str
   const configured = process.env.GEMINI_MODEL?.trim();
   const candidates = Array.from(new Set([
     configured || '',
-    'gemini-3.7-flash',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite',
   ].filter(Boolean)));
 
   let lastStatus = 0;
@@ -693,8 +710,8 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
   const configured = process.env.GEMINI_MODEL?.trim();
   const isGeminiFile = /^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri);
   const candidates = externalUrl || isGeminiFile
-    ? ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
-    : Array.from(new Set([configured || '', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'].filter(Boolean)));
+    ? ['gemini-3.6-flash', 'gemini-3.5-flash-lite']
+    : Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
   for (const model of candidates) {
     const maxAttempts = externalUrl || isGeminiFile ? 2 : 3;
