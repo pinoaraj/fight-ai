@@ -58,3 +58,12 @@ Before changing preview/upload/jobs/evidence/PDF/provider behavior, preserve:
 - automated CI plus deployed smoke for release-affecting changes.
 
 Controlled beta is approved; broad public launch is not. Continue real-device HEVC and PDF regressions and add observability before widening access.
+
+
+## Continuity checkpoint — 2026-09-01
+
+The latest validated web baseline adds two production hardenings without changing the product/report contract:
+- Gemini Files is still primary, with compact inline Interactions fallback only when Files upload capacity (`429/503`) prevents creation of a reusable Gemini file reference.
+- The production smoke waits for three consecutive healthy responses from the expected build SHA and retries transient network resets during ECS task replacement.
+
+Validated runs: Web MVP CI #429/#430 PASS, AWS Deploy #137 PASS, Streaming Production Smoke #75 PASS. Continue from this baseline; do not revert to repeated full video re-uploads or treat a single rollout connection reset as an analysis failure.
