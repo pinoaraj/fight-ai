@@ -22,4 +22,4 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/qa/gemini-proof-red-gloves-tiny.b64 ./qa/gemini-proof-red-gloves-tiny.b64
 EXPOSE 3000
-CMD ["sh","-c","npm run start & node scripts/analysis-worker.mjs & wait -n"]
+CMD ["npm","run","start"]

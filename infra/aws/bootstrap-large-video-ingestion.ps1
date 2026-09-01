@@ -40,7 +40,7 @@ if ($LASTEXITCODE -ne 0) { Invoke-Aws @('iam','create-role','--role-name',$TaskR
 
 $taskPolicyObject = @{ Version = '2012-10-17'; Statement = @(
   @{ Effect = 'Allow'; Action = @('s3:AbortMultipartUpload','s3:CompleteMultipartUpload','s3:CreateMultipartUpload','s3:GetObject','s3:ListBucket','s3:PutObject','s3:UploadPart'); Resource = @($bucketArn,"$bucketArn/*") },
-  @{ Effect = 'Allow'; Action = @('dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem'); Resource = $tableArn }
+  @{ Effect = 'Allow'; Action = @('dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:Scan'); Resource = $tableArn }
 ) }
 $taskPolicy = $taskPolicyObject | ConvertTo-Json -Depth 6 -Compress
 Invoke-Aws @('iam','put-role-policy','--role-name',$TaskRoleName,'--policy-name','FightAILargeVideoIngestion','--policy-document',$taskPolicy) | Out-Null

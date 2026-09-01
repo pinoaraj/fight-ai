@@ -224,6 +224,21 @@ jobs:
           fi
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$DEPLOY_REGION"
 
+          export IMAGE_SHA ECS_TASK_FAMILY ECS_EXECUTION_ROLE_ARN ECS_TASK_ROLE_ARN FIGHT_AI_JOBS_TABLE ALB_DNS
+          python - <<'PY'
+          import json, os
+          td={"family":"fight-ai-analysis-worker","networkMode":"awsvpc","requiresCompatibilities":["FARGATE"],"cpu":"1024","memory":"2048","executionRoleArn":os.environ["ECS_EXECUTION_ROLE_ARN"],"taskRoleArn":os.environ["ECS_TASK_ROLE_ARN"],"containerDefinitions":[{"name":"fight-ai-worker","image":os.environ["IMAGE_SHA"],"essential":True,"command":["node","scripts/analysis-worker.mjs"],"environment":[{"name":"FIGHT_AI_JOBS_TABLE","value":os.environ["FIGHT_AI_JOBS_TABLE"]},{"name":"FIGHT_AI_WORKER_ENDPOINT","value":"http://"+os.environ["ALB_DNS"]}]}]}
+          with open('/tmp/worker-task-def.json','w',encoding='utf-8') as f: json.dump(td,f)
+          PY
+          WORKER_TASK_DEF=$(aws ecs register-task-definition --cli-input-json file:///tmp/worker-task-def.json --region "$DEPLOY_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
+          WORKER_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services fight-ai-analysis-worker --region "$DEPLOY_REGION" --query 'services[0].status' --output text 2>/dev/null || true)
+          if [ -z "$WORKER_STATUS" ] || [ "$WORKER_STATUS" = "None" ]; then
+            aws ecs create-service --cluster "$ECS_CLUSTER" --service-name fight-ai-analysis-worker --task-definition "$WORKER_TASK_DEF" --desired-count 1 --launch-type FARGATE --network-configuration "$NETWORK" --region "$DEPLOY_REGION" >/dev/null
+          else
+            aws ecs update-service --cluster "$ECS_CLUSTER" --service fight-ai-analysis-worker --task-definition "$WORKER_TASK_DEF" --desired-count 1 --force-new-deployment --region "$DEPLOY_REGION" >/dev/null
+          fi
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services fight-ai-analysis-worker --region "$DEPLOY_REGION"
+
       - name: Verify public site and runtime configuration
         run: |
           set -euo pipefail
