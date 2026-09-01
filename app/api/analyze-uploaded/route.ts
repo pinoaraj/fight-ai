@@ -395,24 +395,27 @@ type GeminiPreparedSegment = { fileName: string; fileUri: string; offset: number
 
 async function uploadLocalSegmentToGemini(apiKey: string, path: string, displayName: string, size: number) {
   const mimeType = 'video/mp4';
-  const start = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
-    method: 'POST',
-    headers: {
-      'x-goog-api-key': apiKey,
-      'X-Goog-Upload-Protocol': 'resumable',
-      'X-Goog-Upload-Command': 'start',
-      'X-Goog-Upload-Header-Content-Length': String(size),
-      'X-Goog-Upload-Header-Content-Type': mimeType,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ file: { display_name: displayName.slice(0, 160) } }),
-    cache: 'no-store',
-    signal: AbortSignal.timeout(45_000),
-  });
-    if (!start.ok) {
-      if (start.status === 429 || start.status === 503) throw new Error('GEMINI_BUSY:Gemini está temporalmente ocupado; el análisis se reintentará automáticamente.');
-      throw new Error(`Gemini no pudo iniciar un segmento (${start.status}).`);
-    }
+  let start: Response | undefined;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    start = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': apiKey,
+        'X-Goog-Upload-Protocol': 'resumable',
+        'X-Goog-Upload-Command': 'start',
+        'X-Goog-Upload-Header-Content-Length': String(size),
+        'X-Goog-Upload-Header-Content-Type': mimeType,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ file: { display_name: displayName.slice(0, 160) } }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (start.ok) break;
+    if (start.status !== 429 && start.status !== 503) throw new Error(`Gemini no pudo iniciar un segmento (${start.status}).`);
+    if (attempt < 3) await sleep(Math.max(Number(start.headers.get('retry-after') || 0) * 1000, 15_000 * (attempt + 1)));
+  }
+  if (!start?.ok) throw new Error('GEMINI_BUSY:Gemini está temporalmente ocupado; el análisis se reintentará automáticamente.');
   const uploadUrl = start.headers.get('x-goog-upload-url');
   if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga para un segmento.');
 
@@ -738,39 +741,36 @@ async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (stat
     let fileName = val(data, 'fileName'); let fileUri = val(data, 'fileUri'); let mimeType = val(data, 'mimeType', 'video/mp4');
     if (!fileName || !fileUri) {
       const preprocessingStartedAt = Date.now();
-      const prepared = await prepareInlineSegments(data, updateJob);
-      const segments = prepared.segments;
+      const segments = await prepareGeminiSegments(data, apiKey, updateJob);
       const preprocessingMs = Date.now() - preprocessingStartedAt;
-      try {
-        if (!segments.length) throw new Error('No se pudo preparar el round para análisis rápido.');
+      if (!segments.length) throw new Error('No se pudo preparar el round para análisis rápido.');
 
-        await updateJob?.('coaching');
-        const analysisStartedAt = Date.now();
-        const parts = await mapWithConcurrency(segments, 1, async (segment, index) =>
-          generateCoachJsonInline(
-            apiKey,
-            buildSegmentPrompt(data, index, segments.length, segment.offset, segment.duration),
-            segment.path,
-          )
-        );
-        const merged = mergeSegmentReports(parts, segments.map(segment => segment.offset));
-        const analysisMs = Date.now() - analysisStartedAt;
-        return {
-          mode: 'real', provider: 'Gemini', usedInReport: true,
-          summary: merged.summary || 'Análisis completado con Gemini.',
-          strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
-          plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
-          timings: {
-            preprocessing_ms: preprocessingMs,
-            gemini_processing_ms: analysisMs,
-            analysis_ms: analysisMs,
-            total_ms: Date.now() - startedAt,
-            clip_count: segments.length,
-          },
-        };
-      } finally {
-        await prepared.cleanup();
-      }
+      await updateJob?.('coaching');
+      const analysisStartedAt = Date.now();
+      const parts = await mapWithConcurrency(segments, 1, async (segment, index) =>
+        generateCoachJson(
+          apiKey,
+          buildSegmentPrompt(data, index, segments.length, segment.offset, segment.duration),
+          segment.fileUri,
+          'video/mp4',
+          false,
+        )
+      );
+      const merged = mergeSegmentReports(parts, segments.map(segment => segment.offset));
+      const analysisMs = Date.now() - analysisStartedAt;
+      return {
+        mode: 'real', provider: 'Gemini', usedInReport: true,
+        summary: merged.summary || 'Análisis completado con Gemini.',
+        strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
+        plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
+        timings: {
+          preprocessing_ms: preprocessingMs,
+          gemini_processing_ms: analysisMs,
+          analysis_ms: analysisMs,
+          total_ms: Date.now() - startedAt,
+          clip_count: segments.length,
+        },
+      };
     }
     if (!fileName || !fileUri) throw new Error('Falta la referencia del video cargado.');
     if (!fileName.startsWith('files/') || !/^https:\/\/generativelanguage\.googleapis\.com\//.test(fileUri)) {
