@@ -67,7 +67,7 @@ async function getJob(id: string) {
   return itemToJob(response.Item);
 }
 
-async function updateJob(id: string, status: AnalysisJob['status'], extra: { report?: ReportPayload; error?: string; clearLease?: boolean } = {}) {
+async function updateJob(id: string, status: AnalysisJob['status'], extra: { report?: ReportPayload; error?: string; clearLease?: boolean; payload?: UploadedAnalysisRequest } = {}) {
   if (!tableName) throw new Error('La persistencia de análisis aún no está configurada.');
   const names: Record<string, string> = { '#status': 'status' };
   const values: Record<string, AttributeValue> = {
@@ -75,6 +75,7 @@ async function updateJob(id: string, status: AnalysisJob['status'], extra: { rep
   };
   const sets = ['#status = :status', 'updatedAt = :updatedAt'];
   if (extra.report) { values[':report'] = { S: JSON.stringify(extra.report) }; sets.push('report = :report'); }
+  if (extra.payload) { values[':payload'] = { S: JSON.stringify(extra.payload) }; sets.push('payload = :payload'); }
   if (extra.error) { names['#error'] = 'error'; values[':error'] = { S: extra.error.slice(0, 1200) }; sets.push('#error = :error'); }
   if (extra.clearLease) { values[':lease'] = { N: '0' }; sets.push('leaseExpiresAt = :lease'); }
   await dynamo.send(new UpdateItemCommand({ TableName: tableName, Key: { jobId: { S: id } }, UpdateExpression: `SET ${sets.join(', ')}`, ExpressionAttributeNames: names, ExpressionAttributeValues: values }));
@@ -734,7 +735,11 @@ function val(data: UploadedAnalysisRequest, key: keyof UploadedAnalysisRequest, 
   const value = data[key]; return typeof value === 'string' ? value.trim() : fallback;
 }
 
-async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (status: AnalysisJob['status']) => void | Promise<void>): Promise<ReportPayload> {
+async function completeAnalysis(
+  data: UploadedAnalysisRequest,
+  updateJob?: (status: AnalysisJob['status']) => void | Promise<void>,
+  savePreparedFile?: (prepared: UploadedAnalysisRequest) => void | Promise<void>,
+): Promise<ReportPayload> {
   const startedAt = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini no está configurado en el servidor.');
@@ -744,6 +749,12 @@ async function completeAnalysis(data: UploadedAnalysisRequest, updateJob?: (stat
       const segments = await prepareGeminiSegments(data, apiKey, updateJob);
       const preprocessingMs = Date.now() - preprocessingStartedAt;
       if (!segments.length) throw new Error('No se pudo preparar el round para análisis rápido.');
+      if (segments.length === 1) {
+        fileName = segments[0].fileName;
+        fileUri = segments[0].fileUri;
+        mimeType = 'video/mp4';
+        await savePreparedFile?.({ ...data, fileName, fileUri, mimeType });
+      }
 
       await updateJob?.('coaching');
       const analysisStartedAt = Date.now();
@@ -869,7 +880,11 @@ async function claimAndRun(job: AnalysisJob, waitForCompletion = false) {
     }));
   } catch { return; }
   const heartbeat = setInterval(() => { void heartbeatJob(job.id); }, 30_000);
-  const execution = completeAnalysis(job.payload, async (status) => updateJob(job.id, status)).then(
+  const execution = completeAnalysis(
+    job.payload,
+    async (status) => updateJob(job.id, status),
+    async (payload) => updateJob(job.id, 'preparing', { payload }),
+  ).then(
     (report) => {
       clearInterval(heartbeat);
       return updateJob(job.id, 'complete', { report, clearLease: true });
@@ -953,7 +968,11 @@ export async function GET(req: NextRequest) {
       const stored = await dynamo.send(new GetItemCommand({ TableName: tableName, Key: { jobId: { S: workerJobId } }, ConsistentRead: true }));
       if (!job || stored.Item?.leaseOwner?.S !== workerOwner) return NextResponse.json({ error: 'El lease pertenece a otro worker.' }, { status: 409 });
       try {
-        const report = await completeAnalysis(job.payload, async (status) => updateJob(job.id, status));
+        const report = await completeAnalysis(
+          job.payload,
+          async (status) => updateJob(job.id, status),
+          async (payload) => updateJob(job.id, 'preparing', { payload }),
+        );
         await updateJob(job.id, 'complete', { report, clearLease: true });
         return NextResponse.json({ status: 'complete', id: job.id });
       } catch (error) {
