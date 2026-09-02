@@ -32,6 +32,15 @@ try {
     throw "El servidor seleccionado no paso el contrato exacto de health."
   }
 
+  $externalStatus = $null
+  try {
+    Invoke-WebRequest -Uri "http://127.0.0.1:8788/api/health" -Headers @{ Host = "preview.trycloudflare.com" } -TimeoutSec 3 -ErrorAction Stop | Out-Null
+    $externalStatus = 200
+  } catch {
+    if ($_.Exception.Response) { $externalStatus = [int]$_.Exception.Response.StatusCode }
+  }
+  if ($externalStatus -ne 503) { throw "Un host externo sin contrasena debia fallar cerrado con HTTP 503; recibio $externalStatus." }
+
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\stop-local.ps1")
   if ($LASTEXITCODE -ne 0) { throw "stop-local.ps1 rechazo el servidor Fight AI verificado." }
 

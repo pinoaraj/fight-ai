@@ -78,6 +78,12 @@ Si funciona en el PC pero no desde el telefono:
 
 No abras ni redirijas 8787 (ni ningun puerto de la lista) en el router. El servidor local no debe exponerse directamente a Internet.
 
+## Compartir fuera de la red
+
+Para una prueba externa ejecuta `COMPARTIR_FIGHT_AI.cmd`. Requiere `cloudflared` y crea un enlace HTTPS temporal `*.trycloudflare.com` sin abrir puertos del router. El middleware exige `FIGHT_AI_REMOTE_USER` y `FIGHT_AI_REMOTE_PASSWORD` para cualquier hostname externo; si falta la contrasena, falla cerrado con HTTP 503.
+
+Envia el enlace y las credenciales por canales separados. `DETENER_ENLACE_EXTERNO.cmd` detiene solamente el PID de `cloudflared`; el servidor LAN sigue activo. El enlace cambia al reiniciar y es solo para pruebas. El proxy gratuito limita cada solicitud a 100 MB, por lo que videos mayores requieren un futuro flujo local por partes o un servicio permanente adecuado.
+
 ## Privacidad y flujo del video
 
 En modo local el navegador envia el video al PC. Next.js lo guarda temporalmente, FFmpeg prepara hasta los primeros tres minutos y usa stream-copy como ruta rapida; si el clip sigue siendo grande aplica el fallback H.264 540p. Solo el clip preparado se envia a Gemini. El original y el clip temporales se eliminan al terminar o fallar. Por eso no se debe afirmar que todo el video permanece siempre dentro del PC.
