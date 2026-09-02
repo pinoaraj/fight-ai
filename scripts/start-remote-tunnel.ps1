@@ -73,8 +73,9 @@ if (-not $publicUrl) {
 Clear-DnsClientCache -ErrorAction SilentlyContinue
 
 $unauthorized = $null
-$authDeadline = (Get-Date).AddSeconds(30)
+$authDeadline = (Get-Date).AddSeconds(120)
 while ((Get-Date) -lt $authDeadline -and $unauthorized -ne 401) {
+  Clear-DnsClientCache -ErrorAction SilentlyContinue
   try {
     Invoke-WebRequest -Uri "$publicUrl/api/health" -TimeoutSec 8 -ErrorAction Stop | Out-Null
     $unauthorized = 200
@@ -90,7 +91,7 @@ if ($unauthorized -ne 401) {
 
 $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$username`:$password"))
 $remoteHealth = $null
-$healthDeadline = (Get-Date).AddSeconds(30)
+$healthDeadline = (Get-Date).AddSeconds(60)
 while ((Get-Date) -lt $healthDeadline -and $null -eq $remoteHealth) {
   try {
     $remoteHealth = Invoke-RestMethod -Uri "$publicUrl/api/health" -Headers @{ Authorization = "Basic $encoded" } -TimeoutSec 10
