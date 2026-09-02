@@ -60,11 +60,14 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
     if ($LASTEXITCODE -ne 0) { throw "git fetch fallo; el repo local no fue sobrescrito." }
 
     $repoRoot = [IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\') + '\'
-    $untracked = @(git ls-files --others --exclude-standard)
-    foreach ($untrackedPath in $untracked) {
-      $remoteEntry = git ls-tree "origin/$Branch" -- $untrackedPath
-      if ($LASTEXITCODE -ne 0) { throw "No se pudo inspeccionar de forma segura '$untrackedPath' en la rama remota." }
-      if (-not $remoteEntry) { continue }
+    $currentTracked = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    git ls-files | ForEach-Object { [void]$currentTracked.Add($_) }
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo inspeccionar el arbol Git local." }
+    $remoteFiles = @(git ls-tree -r --name-only "origin/$Branch")
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo inspeccionar el arbol Git remoto." }
+
+    foreach ($untrackedPath in $remoteFiles) {
+      if ($currentTracked.Contains($untrackedPath) -or -not (Test-Path -LiteralPath $untrackedPath -PathType Leaf)) { continue }
 
       $localHash = (git hash-object -- $untrackedPath).Trim()
       $remoteHash = (git rev-parse "origin/$Branch`:$untrackedPath").Trim()
