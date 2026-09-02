@@ -68,37 +68,32 @@ if (-not $publicUrl) {
   throw "Cloudflare Tunnel no entrego una URL. Revisa .fight-ai-tunnel.err.log."
 }
 
-# Windows puede conservar NXDOMAIN durante los segundos en que Cloudflare registra
-# el subdominio nuevo. Limpiamos solo la cache DNS antes del gate HTTPS.
-Clear-DnsClientCache -ErrorAction SilentlyContinue
-
-$unauthorized = $null
-$authDeadline = (Get-Date).AddSeconds(120)
-while ((Get-Date) -lt $authDeadline -and $unauthorized -ne 401) {
-  Clear-DnsClientCache -ErrorAction SilentlyContinue
-  try {
-    Invoke-WebRequest -Uri "$publicUrl/api/health" -TimeoutSec 8 -ErrorAction Stop | Out-Null
-    $unauthorized = 200
-  } catch {
-    if ($_.Exception.Response) { $unauthorized = [int]$_.Exception.Response.StatusCode }
-  }
-  if ($unauthorized -ne 401) { Start-Sleep -Seconds 1 }
+$publicHost = ([uri]$publicUrl).Host
+$publicIp = $null
+$dnsDeadline = (Get-Date).AddSeconds(120)
+while ((Get-Date) -lt $dnsDeadline -and -not $publicIp) {
+  $publicIp = Resolve-DnsName $publicHost -Server 1.1.1.1 -Type A -DnsOnly -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress } |
+    Select-Object -First 1 -ExpandProperty IPAddress
+  if (-not $publicIp) { Start-Sleep -Seconds 1 }
 }
+if (-not $publicIp) {
+  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+  throw "El hostname del tunel no aparecio en DNS publico; el tunel fue detenido."
+}
+
+$unauthorized = & curl.exe --silent --show-error --output NUL --write-out "%{http_code}" `
+  --resolve "$publicHost`:443:$publicIp" "$publicUrl/api/health"
+if ($LASTEXITCODE -eq 0 -and $unauthorized -match '^\d{3}$') { $unauthorized = [int]$unauthorized } else { $unauthorized = $null }
 if ($unauthorized -ne 401) {
   Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
   throw "El enlace externo no exigio autenticacion (HTTP $unauthorized); el tunel fue detenido."
 }
 
 $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$username`:$password"))
-$remoteHealth = $null
-$healthDeadline = (Get-Date).AddSeconds(60)
-while ((Get-Date) -lt $healthDeadline -and $null -eq $remoteHealth) {
-  try {
-    $remoteHealth = Invoke-RestMethod -Uri "$publicUrl/api/health" -Headers @{ Authorization = "Basic $encoded" } -TimeoutSec 10
-  } catch {
-    Start-Sleep -Seconds 1
-  }
-}
+$remoteBody = & curl.exe --silent --show-error --resolve "$publicHost`:443:$publicIp" `
+  --header "Authorization: Basic $encoded" "$publicUrl/api/health"
+$remoteHealth = if ($LASTEXITCODE -eq 0) { $remoteBody | ConvertFrom-Json } else { $null }
 if ($remoteHealth.service -ne "fight-ai-web" -or $remoteHealth.analysisReady -ne $true) {
   Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
   throw "El health autenticado del tunel no corresponde a Fight AI."
