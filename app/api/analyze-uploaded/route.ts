@@ -610,12 +610,15 @@ async function prepareInlineSegments(
       if (!clip.size) throw new Error('El MP4 compatible quedó vacío.');
     }
 
-    // Keep one compact body below the interaction limit; only split if an
-    // unusually complex source still needs it.
-    const targetBytes = 48 * 1024 * 1024;
-    const maxBytes = 56 * 1024 * 1024;
-    const count = Math.max(1, Math.min(10, Math.ceil(clip.size / targetBytes)));
-    if (clip.size / count > maxBytes) throw new Error('El video supera la ruta inline sin recodificar.');
+    // Gemini inline video is intended for requests below 20 MB total. Base64
+    // expands binary video by ~4/3 and the prompt/schema also consume request
+    // bytes, so keep every raw segment comfortably below 15 MB. This path is
+    // only a capacity fallback for Gemini Files, not the normal large-video
+    // transport.
+    const targetBytes = 11 * 1024 * 1024;
+    const maxBytes = 13 * 1024 * 1024;
+    const count = Math.max(1, Math.min(18, Math.ceil(clip.size / targetBytes)));
+    if (clip.size / count > maxBytes) throw new Error('El video supera el límite seguro de la ruta inline.');
 
     const duration = 180 / count;
     const segments: InlineSegment[] = [];
@@ -654,7 +657,15 @@ async function prepareInlineSegments(
 }
 
 async function generateCoachJsonInline(apiKey: string, prompt: string, path: string) {
-  const encoded = (await readFile(path)).toString('base64');
+  const bytes = await readFile(path);
+  // Leave room for base64 expansion + prompt/schema under Gemini's inline
+  // request guidance. If a future regression produces a larger segment, fail
+  // before sending an oversized request to the provider.
+  const inlineRawLimit = 13 * 1024 * 1024;
+  if (bytes.length > inlineRawLimit) {
+    throw new Error('El segmento inline supera el límite seguro antes de enviarlo a Gemini.');
+  }
+  const encoded = bytes.toString('base64');
   const configured = process.env.GEMINI_MODEL?.trim();
   const candidates = Array.from(new Set([
     configured || '',
@@ -664,44 +675,54 @@ async function generateCoachJsonInline(apiKey: string, prompt: string, path: str
 
   let lastStatus = 0;
   for (const model of candidates) {
-    let response: Response;
-    try {
-      response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-        method: 'POST',
-        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          input: [
-            { type: 'video', data: encoded, mime_type: 'video/mp4' },
-            { type: 'text', text: prompt },
-          ],
-          response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
-          store: false,
-        }),
-        cache: 'no-store',
-        signal: AbortSignal.timeout(90_000),
-      });
-    } catch {
-      lastStatus = 0;
-      continue;
-    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST',
+          headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            input: [
+              { type: 'text', text: prompt },
+              { type: 'video', data: encoded, mime_type: 'video/mp4' },
+            ],
+            response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
+            store: false,
+          }),
+          cache: 'no-store',
+          signal: AbortSignal.timeout(120_000),
+        });
+      } catch {
+        lastStatus = 0;
+        if (attempt < 1) { await sleep(2500); continue; }
+        break;
+      }
 
-    lastStatus = response.status;
-    const body = await response.text();
-    if (response.ok) {
-      const text = interactionOutputText(JSON.parse(body) as unknown);
-      if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
-      return cleanGeminiJson(text);
+      lastStatus = response.status;
+      const body = await response.text();
+      if (response.ok) {
+        const text = interactionOutputText(JSON.parse(body) as unknown);
+        if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
+        return cleanGeminiJson(text);
+      }
+
+      // Provider 5xx/429 responses are transient. Never convert one saturated
+      // Gemini interaction into a permanent failed athlete job.
+      if ([429, 500, 502, 503, 504].includes(response.status)) {
+        if (attempt < 1) {
+          await sleep(Math.max(Number(response.headers.get('retry-after') || 0) * 1000, 3000));
+          continue;
+        }
+        break;
+      }
+      if (response.status === 404) break;
+      throw new Error(`Gemini rechazó el análisis inline (${response.status}).`);
     }
-    if (response.status === 429 || response.status === 503 || response.status === 404) {
-      await sleep(1500);
-      continue;
-    }
-    break;
   }
 
-  if (lastStatus === 429 || lastStatus === 503 || lastStatus === 404 || lastStatus === 0) {
-    throw new Error('GEMINI_BUSY:Gemini no respondió a tiempo. El job seguirá intentando automáticamente sin volver a subir el video.');
+  if ([0, 404, 429, 500, 502, 503, 504].includes(lastStatus)) {
+    throw new Error('GEMINI_BUSY:Gemini no respondió de forma estable. El job seguirá intentando automáticamente sin volver a subir el video.');
   }
   throw new Error(`Gemini rechazó el análisis inline (${lastStatus}).`);
 }
