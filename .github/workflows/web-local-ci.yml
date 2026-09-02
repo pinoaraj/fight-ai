@@ -45,6 +45,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20.19.4'
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y --no-progress
       - name: Install
         run: npm install
       - name: Build local runtime
