@@ -80,7 +80,7 @@ No abras ni redirijas 8787 (ni ningun puerto de la lista) en el router. El servi
 
 ## Compartir fuera de la red
 
-Para una prueba externa ejecuta `COMPARTIR_FIGHT_AI.cmd`. Requiere `cloudflared` y crea un enlace HTTPS temporal `*.trycloudflare.com` sin abrir puertos del router. El middleware exige `FIGHT_AI_REMOTE_USER` y `FIGHT_AI_REMOTE_PASSWORD` para cualquier hostname externo; si falta la contrasena, falla cerrado con HTTP 503.
+Para una prueba externa ejecuta `COMPARTIR_FIGHT_AI.cmd`. Usa el cliente oficial Wrangler/Cloudflare y crea un enlace HTTPS temporal `*.trycloudflare.com` sin abrir puertos del router. El middleware exige `FIGHT_AI_REMOTE_USER` y `FIGHT_AI_REMOTE_PASSWORD` para cualquier hostname externo; si falta la contrasena, falla cerrado con HTTP 503.
 
 Envia el enlace y las credenciales por canales separados. `DETENER_ENLACE_EXTERNO.cmd` detiene solamente el PID de `cloudflared`; el servidor LAN sigue activo. El enlace cambia al reiniciar y es solo para pruebas. El proxy gratuito limita cada solicitud a 100 MB, por lo que videos mayores requieren un futuro flujo local por partes o un servicio permanente adecuado.
 

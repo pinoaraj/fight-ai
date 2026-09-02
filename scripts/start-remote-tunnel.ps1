@@ -4,13 +4,22 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
+function Stop-TunnelAttempt($Wrapper, [datetime]$StartedAt) {
+  Get-Process cloudflared -ErrorAction SilentlyContinue |
+    Where-Object { $_.StartTime -ge $StartedAt.AddSeconds(-5) } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  if ($Wrapper -and -not $Wrapper.HasExited) {
+    Stop-Process -Id $Wrapper.Id -Force -ErrorAction SilentlyContinue
+  }
+}
+
+if (-not (Get-Command npx.cmd -ErrorAction SilentlyContinue)) {
   $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
   $env:Path = "$machinePath;$userPath"
 }
-if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
-  throw "Falta cloudflared. Instala Cloudflare Tunnel antes de compartir Fight AI."
+if (-not (Get-Command npx.cmd -ErrorAction SilentlyContinue)) {
+  throw "Falta npx. Instala Node.js/npm antes de compartir Fight AI."
 }
 if (-not (Test-Path ".fight-ai-port")) { throw "Fight AI local no esta iniciado." }
 $portText = Get-Content ".fight-ai-port" | Select-Object -First 1
@@ -41,9 +50,10 @@ if ((Test-Path ".fight-ai-tunnel-url") -and (Test-Path ".fight-ai-tunnel-pid")) 
 
 $stdoutPath = Join-Path $Root ".fight-ai-tunnel.out.log"
 $stderrPath = Join-Path $Root ".fight-ai-tunnel.err.log"
-$cloudflared = (Get-Command cloudflared).Source
-$process = Start-Process -FilePath $cloudflared `
-  -ArgumentList @("tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:$port") `
+$startedAt = Get-Date
+$npx = (Get-Command npx.cmd).Source
+$process = Start-Process -FilePath $npx `
+  -ArgumentList @("--yes", "wrangler@latest", "tunnel", "quick-start", "http://127.0.0.1:$port") `
   -WorkingDirectory $Root `
   -RedirectStandardOutput $stdoutPath `
   -RedirectStandardError $stderrPath `
@@ -64,7 +74,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (-not $publicUrl) {
-  if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+  Stop-TunnelAttempt $process $startedAt
   throw "Cloudflare Tunnel no entrego una URL. Revisa .fight-ai-tunnel.err.log."
 }
 
@@ -78,7 +88,7 @@ while ((Get-Date) -lt $dnsDeadline -and -not $publicIp) {
   if (-not $publicIp) { Start-Sleep -Seconds 1 }
 }
 if (-not $publicIp) {
-  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+  Stop-TunnelAttempt $process $startedAt
   throw "El hostname del tunel no aparecio en DNS publico; el tunel fue detenido."
 }
 
@@ -86,7 +96,7 @@ $unauthorized = & curl.exe --silent --show-error --output NUL --write-out "%{htt
   --resolve "$publicHost`:443:$publicIp" "$publicUrl/api/health"
 if ($LASTEXITCODE -eq 0 -and $unauthorized -match '^\d{3}$') { $unauthorized = [int]$unauthorized } else { $unauthorized = $null }
 if ($unauthorized -ne 401) {
-  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+  Stop-TunnelAttempt $process $startedAt
   throw "El enlace externo no exigio autenticacion (HTTP $unauthorized); el tunel fue detenido."
 }
 
@@ -95,12 +105,21 @@ $remoteBody = & curl.exe --silent --show-error --resolve "$publicHost`:443:$publ
   --header "Authorization: Basic $encoded" "$publicUrl/api/health"
 $remoteHealth = if ($LASTEXITCODE -eq 0) { $remoteBody | ConvertFrom-Json } else { $null }
 if ($remoteHealth.service -ne "fight-ai-web" -or $remoteHealth.analysisReady -ne $true) {
-  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+  Stop-TunnelAttempt $process $startedAt
   throw "El health autenticado del tunel no corresponde a Fight AI."
 }
 
+$tunnelProcess = Get-Process cloudflared -ErrorAction SilentlyContinue |
+  Where-Object { $_.StartTime -ge $startedAt.AddSeconds(-5) } |
+  Sort-Object StartTime -Descending |
+  Select-Object -First 1
+if (-not $tunnelProcess) {
+  Stop-TunnelAttempt $process $startedAt
+  throw "No se encontro el proceso cloudflared creado por Wrangler."
+}
+
 Set-Content ".fight-ai-tunnel-url" $publicUrl -Encoding ascii
-Set-Content ".fight-ai-tunnel-pid" $process.Id -Encoding ascii
+Set-Content ".fight-ai-tunnel-pid" $tunnelProcess.Id -Encoding ascii
 Write-Host ""
 Write-Host "Fight AI disponible fuera de tu red:" -ForegroundColor Green
 Write-Host $publicUrl -ForegroundColor Green
