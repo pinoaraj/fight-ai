@@ -62,8 +62,9 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
     $repoRoot = [IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\') + '\'
     $untracked = @(git ls-files --others --exclude-standard)
     foreach ($untrackedPath in $untracked) {
-      git cat-file -e "origin/$Branch`:$untrackedPath" 2>$null
-      if ($LASTEXITCODE -ne 0) { continue }
+      $remoteEntry = git ls-tree "origin/$Branch" -- $untrackedPath
+      if ($LASTEXITCODE -ne 0) { throw "No se pudo inspeccionar de forma segura '$untrackedPath' en la rama remota." }
+      if (-not $remoteEntry) { continue }
 
       $localHash = (git hash-object -- $untrackedPath).Trim()
       $remoteHash = (git rev-parse "origin/$Branch`:$untrackedPath").Trim()
