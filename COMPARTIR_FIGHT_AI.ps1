@@ -10,7 +10,8 @@ if ($envText -notmatch '(?m)^FIGHT_AI_REMOTE_USER=.+$') {
 }
 if ($envText -notmatch '(?m)^FIGHT_AI_REMOTE_PASSWORD=.+$') {
   $bytes = [byte[]]::new(18)
-  [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
   $password = [Convert]::ToBase64String($bytes).Replace('+','A').Replace('/','B').TrimEnd('=')
   Add-Content ".env.local" "FIGHT_AI_REMOTE_PASSWORD=$password"
   $createdPassword = $true
