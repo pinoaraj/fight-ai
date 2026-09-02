@@ -58,6 +58,27 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
   } else {
     git fetch origin $Branch
     if ($LASTEXITCODE -ne 0) { throw "git fetch fallo; el repo local no fue sobrescrito." }
+
+    $repoRoot = [IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\') + '\'
+    $untracked = @(git ls-files --others --exclude-standard)
+    foreach ($untrackedPath in $untracked) {
+      git cat-file -e "origin/$Branch`:$untrackedPath" 2>$null
+      if ($LASTEXITCODE -ne 0) { continue }
+
+      $localHash = (git hash-object -- $untrackedPath).Trim()
+      $remoteHash = (git rev-parse "origin/$Branch`:$untrackedPath").Trim()
+      if ($LASTEXITCODE -ne 0 -or $localHash -ne $remoteHash) {
+        throw "El archivo local no rastreado '$untrackedPath' chocaria con la actualizacion y no es identico al remoto. Se conservo sin cambios."
+      }
+
+      $fullUntrackedPath = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path $untrackedPath))
+      if (-not $fullUntrackedPath.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Ruta no rastreada fuera del repo; se cancelo la actualizacion segura."
+      }
+      Remove-Item -LiteralPath $fullUntrackedPath -Force
+      Write-Host "[SEGURO] Se reemplazara '$untrackedPath': era no rastreado e identico al archivo remoto." -ForegroundColor DarkGray
+    }
+
     if ($currentBranch -ne $Branch) {
       git checkout $Branch
       if ($LASTEXITCODE -ne 0) { throw "No se pudo cambiar de forma segura a $Branch." }

@@ -53,7 +53,7 @@ FIGHT_AI_API_URL=
 
 El instalador crea `.env.local` solo si no existe. Nunca reemplaza una `GEMINI_API_KEY` existente. `.env.local` esta ignorado por Git.
 
-Cuando encuentra un repo existente, verifica que `origin` sea `pinoaraj/fight-ai`. Si hay cambios locales rastreados, los conserva y omite la actualizacion automatica. Con un arbol limpio usa `fetch`, cambia a `web/mvp` y aplica solamente `pull --ff-only`; nunca ejecuta `reset` ni descarta cambios.
+Cuando encuentra un repo existente, verifica que `origin` sea `pinoaraj/fight-ai`. Si hay cambios locales rastreados, los conserva y omite la actualizacion automatica. Si un archivo generado no rastreado choca con el remoto, solo lo reemplaza cuando ambos contenidos tienen el mismo hash; si difieren, cancela sin tocarlo. Con un arbol limpio usa `fetch`, cambia a `web/mvp` y aplica solamente `pull --ff-only`; nunca ejecuta `reset` ni descarta cambios.
 
 ## Detener sin afectar otras aplicaciones
 
