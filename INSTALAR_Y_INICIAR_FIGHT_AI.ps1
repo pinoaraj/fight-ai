@@ -21,12 +21,12 @@ function Refresh-Path {
 }
 
 function Find-FreePort {
-  param([int[]]$Candidates = @(3000,3001,3002,3003,8787))
+  param([int[]]$Candidates = @(8787,8788,8790,8899,3002,3003))
   foreach ($candidate in $Candidates) {
     $busy = Get-NetTCPConnection -State Listen -LocalPort $candidate -ErrorAction SilentlyContinue
     if (-not $busy) { return $candidate }
   }
-  throw "No encontramos un puerto libre entre 3000, 3001, 3002, 3003 y 8787."
+  throw "No encontramos un puerto libre entre 8787, 8788, 8790, 8899, 3002 y 3003."
 }
 
 function Ensure-Command($Name, $WingetId, $Label) {
