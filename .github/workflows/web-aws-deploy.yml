@@ -2,20 +2,10 @@ name: Web AWS Deploy
 # The analysis worker is deployed as a separate ECS service and writes CloudWatch logs.
 
 on:
+  # AWS is no longer the default beta runtime. Keep cloud workflows available
+  # only for an explicit manual recovery/test so local-PC work cannot create
+  # accidental ECS/ALB/CloudFront spend.
   workflow_dispatch:
-  push:
-    branches: [web/mvp]
-    paths:
-      - '.github/workflows/web-aws-deploy.yml'
-      - '.github/workflows/web-streaming-smoke.yml'
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'package.json'
-      - 'tsconfig.json'
-      - 'instrumentation.ts'
-      - 'scripts/**'
-      - 'app/**'
-      - 'infra/aws/**'
 
 permissions:
   contents: read

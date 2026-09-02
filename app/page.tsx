@@ -23,7 +23,7 @@ type UploadedAnalysisSession = {
   context: AnalysisContext;
   timings: PipelineTimings;
 };
-type ServiceHealth = { geminiConfigured?: boolean; analysisReady?: boolean };
+type ServiceHealth = { geminiConfigured?: boolean; analysisReady?: boolean; backendConfigured?: boolean; localMode?: boolean; runtimeMode?: string };
 
 const focusOptions = [
   ['technique','Mejorar boxeo'], ['weaknesses','Detectar debilidades'], ['strategy','Analizar estrategia'],
@@ -134,7 +134,7 @@ export default function Home() {
     : elapsed < 600
       ? 'El trabajo sigue activo en el servidor. La fase mostrada es la fase real del job; no necesitas volver a subir el video.'
       : 'Está tardando más de lo normal. Fight AI conservará el job y podrás reintentarlo sin volver a subir el video.';
-  const identityReady = Boolean(gloveColor || topColor || fighterNotes.trim() || relativeHeight || build);
+  const identityReady = Boolean(anchor || gloveColor.trim() || topColor.trim() || fighterNotes.trim() || relativeHeight || build);
   const workflowStep = report || busy ? 5 : !video ? 1 : !anchor ? 2 : !identityReady ? 3 : !focusConfirmed ? 4 : 5;
   const nextPrompts = ['SUBE TU VIDEO', 'MARCA AL PELEADOR', 'CONFIRMA SUS RASGOS', 'ELIGE EL FOCO DEL COACH', report ? 'REVISA TU REPORTE' : busy ? 'ANALIZANDO…' : 'ANALIZA TU SPARRING'];
   const workflowLabels = ['Subir video', 'Seleccionar peleador', 'Características', 'Foco del coach', report || busy ? 'Reporte' : 'Analizar sparring'];
@@ -436,7 +436,7 @@ export default function Home() {
     if (!video) return setError('Selecciona un video antes de analizar.');
     if (!anchor && !gloveColor && !topColor && !fighterNotes.trim()) {
       document.getElementById('fighter-identity')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return setError('Antes de analizar, identifica al atleta: pulsa “MARCAR PELEADOR” sobre el frame o elige una característica rápida, por ejemplo “Guantes rojos”.');
+      return setError('Antes de analizar, identifica al atleta: marca al peleador sobre el frame o escribe una descripción visual clara.');
     }
     setBusy(true); setStageFloor(0); setError(''); setReport(null); setFrames({});
     try {
@@ -449,9 +449,9 @@ export default function Home() {
         anchor_size: anchor ? anchor.size.toFixed(2) : '', anchor_time: anchor ? previewTime.toFixed(2) : '',
       };
       const healthResponse = await fetch('/api/health', { cache: 'no-store' });
-      const health = healthResponse.ok ? await healthResponse.json() as { backendConfigured?: boolean } : {};
+      const health = healthResponse.ok ? await healthResponse.json() as ServiceHealth : {};
       let response: Response;
-      if (health.backendConfigured) {
+      if (health.localMode || health.backendConfigured) {
         const body = new FormData(); body.append('video', video);
         for (const [key, value] of Object.entries(context)) body.append(key, value);
         response = await fetch('/api/analyze', { method: 'POST', body });
@@ -505,8 +505,8 @@ export default function Home() {
   }
 
   return <main>
-    <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO GEMINI…' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
-    <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>Tu video se usa sólo para este análisis.</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
+    <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO MOTOR…' : serviceHealth.localMode && serviceHealth.geminiConfigured ? ' PC LOCAL · GEMINI LISTO' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
+    <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>{serviceHealth?.localMode ? 'Tu PC procesa el video localmente y solo el clip de análisis se envía a Gemini.' : 'Tu video se usa sólo para este análisis.'}</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
     <section className="workflowStrip" aria-label="Progreso del análisis" aria-live="polite">{workflowLabels.map((label,index)=>{ const current=workflowStep===index+1; return <span key={label} className={`${current?'active nextPulse':workflowStep>index+1?'done':''}`}><i>{workflowStep>index+1?'✓':index+1}</i><b>{label}</b>{current && <small>{nextPrompts[index]}</small>}</span>; })}</section>
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Rounds de hasta 3 minutos" />
@@ -515,16 +515,15 @@ export default function Home() {
       <div id="fighter-identity"><SectionTitle n="02" title="SELECCIONA AL PELEADOR" subtitle="Pulsa marcar sobre el frame o elige una característica para continuar" extraClass="fighterTitle" />
       <div className="anchorControls"><button data-testid="mark-fighter" className={marking?'active':''} disabled={!video} onClick={toggleMarking}>{anchor?'AJUSTAR CÍRCULO':'MARCAR PELEADOR'}</button>{anchor && <button onClick={()=>{ setAnchor(null); setSelectionFrameUrl(''); }}>Limpiar</button>}</div>
       {anchor && <><div className="anchorConfirmed">✓ Peleador marcado en {Math.floor(previewTime/60)}:{String(Math.floor(previewTime%60)).padStart(2,'0')}</div><label className="rangeLabel">Tamaño del círculo<input type="range" min="12" max="48" value={anchor.size} onChange={e=>setAnchor({...anchor,size:Number(e.target.value)})}/></label></>}
-      <SectionTitle n="03" title="CARACTERÍSTICAS" subtitle="Una sola pista basta si no puedes marcar el frame" extraClass="optionsTitle" />
-      <div className="identityQuick" aria-label="Características rápidas"><span>ELIGE A TU ATLETA:</span>{['Guantes rojos','Guantes azules','Guantes negros'].map((color)=><button type="button" key={color} className={gloveColor===color.replace('Guantes ','').toLowerCase()?'active':''} onClick={()=>{ setGloveColor(color.replace('Guantes ','').toLowerCase()); setError(''); }}>{color}</button>)}</div>
-      <div className="identityGrid"><label>Color de guantes<input data-testid="glove-color" value={gloveColor} onChange={e=>setGloveColor(e.target.value)} placeholder="Ej. rojos"/></label><label>Ropa / polera<input value={topColor} onChange={e=>setTopColor(e.target.value)} placeholder="Ej. polera negra"/></label><label>Altura relativa<select value={relativeHeight} onChange={e=>setRelativeHeight(e.target.value)}><option value="">No sé</option><option value="shorter">Más bajo</option><option value="similar">Similar</option><option value="taller">Más alto</option></select></label><label>Contextura<select value={build} onChange={e=>setBuild(e.target.value)}><option value="">No sé</option><option value="slim">Delgada</option><option value="medium">Media / atlética</option><option value="stocky">Robusta</option></select></label><label className="wide">Otras características<textarea data-testid="fighter-notes" value={fighterNotes} onChange={e=>setFighterNotes(e.target.value)} placeholder="Ej. más bajo, pelo corto, shorts negros, protector rojo…"/></label></div></div>
+      <SectionTitle n="03" title="DESCRIBE AL PELEADOR" subtitle="Escribe rasgos visibles; los guantes pueden tener varios colores" extraClass="optionsTitle" />
+      <div className="identityGrid"><label>Guantes / diseño<input data-testid="glove-color" value={gloveColor} onChange={e=>{setGloveColor(e.target.value);setError('');}} placeholder="Ej. blancos y rojos, puño negro"/></label><label>Ropa / polera<input value={topColor} onChange={e=>setTopColor(e.target.value)} placeholder="Ej. polera negra, shorts con franja blanca"/></label><label>Altura relativa<select value={relativeHeight} onChange={e=>setRelativeHeight(e.target.value)}><option value="">No sé</option><option value="shorter">Más bajo</option><option value="similar">Similar</option><option value="taller">Más alto</option></select></label><label>Contextura<select value={build} onChange={e=>setBuild(e.target.value)}><option value="">No sé</option><option value="slim">Delgada</option><option value="medium">Media / atlética</option><option value="stocky">Robusta</option></select></label><label className="wide">Descripción visual completa<textarea data-testid="fighter-notes" value={fighterNotes} onChange={e=>{setFighterNotes(e.target.value);setError('');}} placeholder="Ej. guantes blancos/rojos, polera negra, más bajo, shorts negros con franja blanca, protector rojo…"/></label></div></div>
       <SectionTitle n="04" title="FOCO DEL COACH" subtitle="Dile qué quieres que priorice" extraClass="optionsTitle" />
       <div className="focusGrid">{focusOptions.map(([id,label])=><button data-testid={`focus-${id}`} key={id} className={focuses.includes(id)?'active':''} onClick={()=>toggleFocus(id)}>{focuses.includes(id)?'✓ ':''}{label}</button>)}</div>
       <label className="customFocus">Objetivo personalizado<textarea value={customFocus} onChange={e=>{ setFocusConfirmed(true); setCustomFocus(e.target.value); }} placeholder="Ej. quiero saber por qué me conectan al entrar, cómo cerrar mejor la distancia y qué estrategia usar contra este rival."/></label>
       <SectionTitle n="05" title="CONFIGURACIÓN" subtitle="Contexto del análisis" extraClass="optionsTitle" />
       <div className="analysisOptions"><label>Disciplina<select data-testid="sport-select" value={sport} onChange={e=>setSport(e.target.value as 'boxing'|'kickboxing')}><option value="boxing">Boxeo</option><option value="kickboxing">Kickboxing</option></select></label><label>Guardia<select data-testid="stance-select" value={stance} onChange={e=>setStance(e.target.value as 'orthodox'|'southpaw'|'switch')}><option value="orthodox">Ortodoxa</option><option value="southpaw">Zurda</option><option value="switch">Switch</option></select></label><label>Idioma<select value={language} onChange={e=>setLanguage(e.target.value as 'es'|'en')}><option value="es">Español</option><option value="en">English</option></select></label></div>
       <div className="analysisTiming"><b>TIEMPO ESTIMADO</b><span>Analizamos un máximo de 3:00 desde el inicio del round. Si el video es más largo, el resto no se usa. Un round de 3 min suele tardar 2–5 min.</span></div>
-      <button data-testid="analyze-button" className="primary" disabled={busy||!video} onClick={analyze}>{busy?'ANALIZANDO SPARRING…':'ANALIZAR SPARRING'}<span>→</span></button>
+      <button data-testid="analyze-button" className={`primary ${workflowStep===5 && !busy && !report ? 'nextPulse' : ''}`} disabled={busy||!video} onClick={analyze}>{busy?'ANALIZANDO SPARRING…':'ANALIZAR SPARRING'}<span>→</span></button>
       {busy && <div className="processingCard" data-testid="processing-state" role="status" aria-live="polite"><div className="spinner"/><div><div className="processingMeta"><b>TRABAJANDO · {processingSteps[processingStep].typical}</b><time>{elapsedLabel}</time></div><strong>{processingSteps[processingStep].title}</strong><span>{processingSteps[processingStep].detail} {waitGuidance}</span></div><div className="processTrack">{processingSteps.map((_,i)=><i key={i} className={i<=processingStep?'done':''}/>)}</div></div>}
       {error && <div className="error" role="alert"><b>No pudimos terminar el análisis</b><span>{error}</span>{uploadedSession && !busy && <button data-testid="retry-uploaded-analysis" onClick={retryUploadedAnalysis}>REINTENTAR ANÁLISIS SIN VOLVER A SUBIR</button>}</div>}
     </aside>

@@ -1,18 +1,10 @@
 name: Web Streaming Production Smoke
 
 on:
+  # AWS is no longer the default beta runtime. Keep cloud workflows available
+  # only for an explicit manual recovery/test so local-PC work cannot create
+  # accidental ECS/ALB/CloudFront spend.
   workflow_dispatch:
-  push:
-    branches: [web/mvp]
-    paths:
-      - '.github/workflows/web-streaming-smoke.yml'
-      - '.github/workflows/web-aws-deploy.yml'
-      - 'app/api/direct-upload/**'
-      - 'app/api/analyze-uploaded/**'
-      - 'app/api/health/**'
-      - 'app/page.tsx'
-      - 'scripts/**'
-      - 'Dockerfile'
 
 permissions:
   contents: read

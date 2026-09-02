@@ -2,11 +2,11 @@
 
 Web client for the Fight AI combat-sparring analysis platform.
 
-## Status — controlled beta ready (2026-09-01)
+## Status — local-PC beta migration (2026-09-02)
 
-Canonical branch: `web/mvp`  
-PR: #2  
-Public HTTPS beta: https://d1ga34t3tjgix2.cloudfront.net
+Canonical cloud baseline: `web/mvp`  
+Active local-server work: `feature/hybrid-coach-engine`  
+PR #2 remains the historical controlled-cloud beta baseline.
 
 The web beta is cleared for controlled beta testing. Latest validated baseline:
 - Web MVP CI #432/#433: PASS on the final documented HEAD;
@@ -22,9 +22,15 @@ The web beta is cleared for controlled beta testing. Latest validated baseline:
 
 ## Current architecture
 
-Browser → signed multipart S3 upload → DynamoDB durable job → ECS worker → 0:00–3:00 stream-copy clip → Gemini → evidence-first coaching report.
+Primary beta target:
 
-Gemini Files is the normal transport. If the resumable Files upload is capacity-limited before a reusable file reference exists, the worker falls back to the existing compact inline Interactions path for the same private S3 source. The original upload remains private and intact in S3. Long-running analysis does not depend on the browser request staying open. HEVC/Main10 is not fully transcoded by default.
+Browser / phone on the same LAN → Fight AI Web on the Windows PC → local FFmpeg 0:00–3:00 preparation → Fight AI Boxing Knowledge Engine → Gemini → coaching report.
+
+Set `FIGHT_AI_RUNTIME=local` to activate this path. In local mode the normal analysis flow does **not** use S3, DynamoDB, ECS, ALB or CloudFront. Temporary source/clip files are created on the PC and deleted in a `finally` cleanup after the analysis attempt.
+
+AWS code is intentionally preserved as an optional/historical cloud path until the local beta has completed regression testing. Do not delete the cloud infrastructure yet.
+
+See `docs/LOCAL_PC_SERVER.md` and launch with `INICIAR_FIGHT_AI_LOCAL.cmd`.
 
 ## Product baseline
 
@@ -38,9 +44,10 @@ Gemini Files is the normal transport. If the resumable Files upload is capacity-
 - Visual Coach diagrams and correction references
 - PDF/print gate waits for real evidence images
 - phase-by-phase durable analysis progress
-- private S3 + DynamoDB TTL
-- ECS/Fargate + ALB + CloudFront HTTPS
-- GitHub Actions OIDC; no static AWS credentials in source
+- local Windows server mode with FFmpeg preprocessing
+- hybrid boxing-knowledge retrieval + Gemini clinical review
+- AWS transport retained only as optional legacy/cloud path
+- no static AWS credentials in source
 
 ## Source of truth
 
@@ -61,4 +68,4 @@ A beta-ready build is not a general-public-production declaration. Continue real
 
 ## Latest checkpoint
 
-Validated on 2026-09-01: CI #432/#433 PASS, AWS Deploy #137 PASS and Production Streaming Smoke #75 PASS. Controlled beta remains GREEN. PR #2 stays open for beta feedback; do not merge a later regression while applicable CI/deploy/smoke gates are red.
+2026-09-02 local migration in progress on `feature/hybrid-coach-engine`: local runtime flag, PC-direct analysis path, local FFmpeg preprocessing, hybrid knowledge retrieval, flexible fighter description and Windows start/stop scripts have been added. The previous AWS production baseline remains green but is no longer the intended beta runtime because of cost.
