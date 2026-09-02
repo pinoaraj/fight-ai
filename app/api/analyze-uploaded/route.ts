@@ -210,6 +210,35 @@ function makeCompactCompatibleClip(inputPath: string, outputPath: string) {
   });
 }
 
+/**
+ * Inline Interactions has a much smaller request budget than Gemini Files.
+ * When Files is saturated, make one deliberately small 3-minute coaching clip
+ * instead of splitting the round into many sequential model calls. 480p at a
+ * bounded bitrate preserves enough motion/guard/footwork detail for the
+ * fallback while keeping the raw MP4 around 11-12 MB before base64 expansion.
+ */
+function makeInlineCompatibleClip(inputPath: string, outputPath: string) {
+  return new Promise<void>((resolve, reject) => {
+    const args = [
+      '-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath, '-t', '180',
+      '-map', '0:v:0?', '-map', '0:a?', '-vf', 'scale=-2:480',
+      '-c:v', 'libx264', '-preset', 'veryfast',
+      '-b:v', '440k', '-maxrate', '500k', '-bufsize', '1000k', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '48k', '-movflags', '+faststart', outputPath,
+    ];
+    const encoder = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('La conversión inline del round tardó demasiado.')); }, 4 * 60 * 1000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible para convertir el fallback inline.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo convertir el fallback inline.'));
+    });
+  });
+}
+
 async function uploadS3VideoToGemini(data: UploadedAnalysisRequest, apiKey: string, updateJob?: (status: AnalysisJob['status']) => void | Promise<void>) {
   const key = val(data, 's3Key');
   if (!key || !key.startsWith('uploads/') || !bucket) throw new Error('Referencia de video no válida.');
@@ -599,25 +628,21 @@ async function prepareInlineSegments(
     let clip = await stat(clipPath);
     if (!clip.size) throw new Error('El clip de 3 minutos quedó vacío.');
 
-    // The inline Gemini interaction avoids the separately rate-limited Files
-    // API. Make the same narrow compatibility fallback used by the Files path
-    // before encoding the body, so a high-bitrate HEVC source remains one
-    // compact request rather than many short requests.
-    if (clip.size > 45 * 1024 * 1024) {
-      await unlink(clipPath);
-      await makeCompactCompatibleClip(inputPath, clipPath);
-      clip = await stat(clipPath);
-      if (!clip.size) throw new Error('El MP4 compatible quedó vacío.');
-    }
-
-    // Gemini inline video is intended for requests below 20 MB total. Base64
-    // expands binary video by ~4/3 and the prompt/schema also consume request
-    // bytes, so keep every raw segment comfortably below 15 MB. This path is
-    // only a capacity fallback for Gemini Files, not the normal large-video
-    // transport.
+    // Inline is only a Files-capacity fallback. Force a single bounded-size
+    // three-minute clip whenever stream-copy is too large so we avoid N
+    // sequential model calls (the source of ~10 minute real-device waits).
     const targetBytes = 11 * 1024 * 1024;
     const maxBytes = 13 * 1024 * 1024;
-    const count = Math.max(1, Math.min(18, Math.ceil(clip.size / targetBytes)));
+    if (clip.size > targetBytes) {
+      await unlink(clipPath);
+      await makeInlineCompatibleClip(inputPath, clipPath);
+      clip = await stat(clipPath);
+      if (!clip.size) throw new Error('El MP4 inline quedó vacío.');
+    }
+
+    // Normally this is now exactly one segment. Keep a two-part emergency
+    // guard only for encoder/container overhead unexpectedly above the limit.
+    const count = Math.max(1, Math.min(2, Math.ceil(clip.size / targetBytes)));
     if (clip.size / count > maxBytes) throw new Error('El video supera el límite seguro de la ruta inline.');
 
     const duration = 180 / count;
@@ -801,7 +826,7 @@ async function completeAnalysis(
         try {
           await updateJob?.('coaching');
           const analysisStartedAt = Date.now();
-          const parts = await mapWithConcurrency(inline.segments, 1, async (segment, index) =>
+          const parts = await mapWithConcurrency(inline.segments, Math.min(2, inline.segments.length), async (segment, index) =>
             generateCoachJsonInline(
               apiKey,
               buildSegmentPrompt(data, index, inline.segments.length, segment.offset, segment.duration),
