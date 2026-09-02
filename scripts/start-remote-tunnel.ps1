@@ -5,6 +5,11 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  $env:Path = "$machinePath;$userPath"
+}
+if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
   throw "Falta cloudflared. Instala Cloudflare Tunnel antes de compartir Fight AI."
 }
 if (-not (Test-Path ".fight-ai-port")) { throw "Fight AI local no esta iniciado." }
