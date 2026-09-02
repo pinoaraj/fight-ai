@@ -1,0 +1,10 @@
+.env.local
+.fight-ai-port
+.fight-ai-pid
+.fight-ai-server-*.out.log
+.fight-ai-server-*.err.log
+.next/
+node_modules/
+test-results/
+playwright-report/
+*.tsbuildinfo

@@ -1,5 +1,7 @@
 # Fight AI — Codex handoff (2026-08-29)
 
+> **Current runtime decision (2026-09-02):** `web/mvp` runs primarily on the owner's Windows PC over the private LAN. The AWS architecture documented below is retained only as historical/optional infrastructure; its deploy and smoke workflows are manual-only. Local work must not require or trigger AWS. See `docs/LOCAL_PC_SERVER.md` for the authoritative launcher, dedicated-port and health contract.
+
 ## Canonical branches
 
 - Web beta: `web/mvp`

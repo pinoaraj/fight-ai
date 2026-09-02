@@ -1,72 +1,48 @@
 # Fight AI Web — servidor local en Windows
 
-## Objetivo
+## Arquitectura activa
 
-La beta web usa el PC del propietario como servidor principal para reducir el costo de infraestructura.
-
-Ruta principal:
+La beta web usa el PC Windows del propietario como runtime principal:
 
 ```text
-Telefono / navegador
-        |
-        | Wi-Fi / LAN
-        v
-Fight AI Web (PC Windows, puerto 3000)
-        |
-        +--> FFmpeg local: recorte 0:00-3:00
-        |
-        +--> Fight AI Boxing Knowledge Engine
-        |
-        +--> Gemini API (solo clip preparado para analisis)
-        |
-        v
-Reporte de coaching
+Telefono / navegador en la misma LAN
+        -> Fight AI Web en el PC
+        -> FFmpeg local (preparacion 0:00-3:00)
+        -> Fight AI Boxing Knowledge Engine
+        -> Gemini API (clip preparado)
+        -> reporte
 ```
 
-AWS queda como infraestructura historica/opcional. El modo local no requiere S3, DynamoDB, ECS, ALB ni CloudFront.
+AWS queda como infraestructura historica/opcional. Los workflows AWS son manuales y no forman parte del arranque local.
 
-## Privacidad del video
+## Inicio rapido
 
-En modo local:
+La primera vez, ejecuta `INSTALAR_Y_INICIAR_FIGHT_AI.cmd`. Para ejecuciones posteriores usa `INICIAR_FIGHT_AI_LOCAL.cmd`.
 
-1. el navegador envia el video al PC;
-2. Next.js lo guarda solo en un archivo temporal del sistema;
-3. FFmpeg crea el clip de analisis de hasta tres minutos;
-4. clips grandes se compactan localmente antes de Gemini;
-5. el original temporal y el clip temporal se eliminan al terminar, tanto en exito como en error.
+El launcher busca el primer puerto disponible, en este orden:
 
-Gemini sigue recibiendo el clip necesario para el analisis. No afirmar que el video nunca sale del PC.
+```text
+8787, 8788, 8790, 8899, 3002, 3003
+```
 
-## Requisitos
+No anuncia **Fight AI listo** solo porque un puerto parezca libre. Primero inicia Next.js y consulta `GET http://127.0.0.1:<PUERTO>/api/health`. La validacion exige simultaneamente:
 
-- Windows 10/11
-- Node.js 20 o superior
-- npm
-- FFmpeg disponible en PATH
-- conexion a Internet para Gemini
-- `GEMINI_API_KEY`
+- `service == "fight-ai-web"`
+- `localMode == true`
+- `analysisReady == true`
 
-## Primera ejecucion
+Si el puerto esta ocupado, Next no logra tomarlo o responde otra aplicacion, prueba el siguiente. Solo despues de validar guarda `.fight-ai-port` y `.fight-ai-pid` y muestra las URLs reales.
 
-1. Ejecuta `INICIAR_FIGHT_AI_LOCAL.cmd`.
-2. Si no existe, el script crea `.env.local` desde `.env.local.example`.
-3. Abre `.env.local`.
-4. Reemplaza `REEMPLAZA_CON_TU_API_KEY` por la API key real.
-5. Ejecuta de nuevo `INICIAR_FIGHT_AI_LOCAL.cmd`.
-6. El script instala dependencias si faltan, hace build y levanta Next.js en `0.0.0.0:3000`.
+Con 8787 libre, abre:
 
-El terminal mostrara dos direcciones cuando sea posible:
+- PC: `http://localhost:8787`
+- telefono: `http://IP_LAN_DEL_PC:8787`
 
-- PC: `http://localhost:3000`
-- telefono/LAN: `http://IP_DEL_PC:3000`
+El launcher imprime la IP LAN detectada. El PC y el telefono deben estar en la misma Wi-Fi/LAN.
 
-El telefono debe estar en la misma red local.
+## Configuracion y actualizaciones seguras
 
-## Detener
-
-Ejecuta `DETENER_FIGHT_AI_LOCAL.cmd` o usa Ctrl+C en la terminal del servidor.
-
-## Variables
+Variables esperadas en `.env.local`:
 
 ```env
 FIGHT_AI_RUNTIME=local
@@ -75,22 +51,35 @@ GEMINI_MODEL=gemini-3.6-flash
 FIGHT_AI_API_URL=
 ```
 
-En modo `local`, `FIGHT_AI_API_URL` se ignora para evitar delegar por accidente a un backend cloud antiguo.
+El instalador crea `.env.local` solo si no existe. Nunca reemplaza una `GEMINI_API_KEY` existente. `.env.local` esta ignorado por Git.
 
-## Flujo de analisis local
+Cuando encuentra un repo existente, verifica que `origin` sea `pinoaraj/fight-ai`. Si hay cambios locales rastreados, los conserva y omite la actualizacion automatica. Con un arbol limpio usa `fetch`, cambia a `web/mvp` y aplica solamente `pull --ff-only`; nunca ejecuta `reset` ni descarta cambios.
 
-La web usa `POST /api/analyze` directamente en modo local. El servidor:
+## Detener sin afectar otras aplicaciones
 
-- recibe el archivo desde la LAN;
-- crea una copia temporal;
-- hace stream-copy de los primeros tres minutos;
-- si el clip supera 45 MB, hace un unico fallback H.264 540p;
-- sube ese clip a Gemini Files;
-- recupera fundamentos relevantes desde la base Fight AI;
-- pide a Gemini validar/descartar esos fundamentos usando el video;
-- construye el reporte;
-- elimina los temporales.
+Ejecuta `DETENER_FIGHT_AI_LOCAL.cmd`. La parada:
 
-## Acceso externo
+1. no usa un puerto por defecto;
+2. lee `.fight-ai-port`;
+3. vuelve a validar el health exacto de Fight AI;
+4. exige que `.fight-ai-pid` sea el proceso Node.js que escucha ese puerto;
+5. detiene solo ese PID.
 
-No abrir el puerto 3000 directamente en el router. Para pruebas fuera de la casa/oficina se debe agregar un tunel HTTPS autenticado (por ejemplo Cloudflare Tunnel) como etapa separada.
+Si cualquiera de esas comprobaciones falla, se niega a matar procesos. Esto protege aplicaciones como Medical Platform o Medical SaaS aunque usen otros puertos locales.
+
+## Acceso desde el telefono y Firewall
+
+Si funciona en el PC pero no desde el telefono:
+
+- configura la red de Windows como **Privada**;
+- permite Node.js en Windows Firewall solo para redes privadas;
+- confirma que ambos dispositivos esten en la misma LAN y que la Wi-Fi no aisle clientes;
+- usa exactamente la URL LAN impresa por el launcher.
+
+No abras ni redirijas 8787 (ni ningun puerto de la lista) en el router. El servidor local no debe exponerse directamente a Internet.
+
+## Privacidad y flujo del video
+
+En modo local el navegador envia el video al PC. Next.js lo guarda temporalmente, FFmpeg prepara hasta los primeros tres minutos y usa stream-copy como ruta rapida; si el clip sigue siendo grande aplica el fallback H.264 540p. Solo el clip preparado se envia a Gemini. El original y el clip temporales se eliminan al terminar o fallar. Por eso no se debe afirmar que todo el video permanece siempre dentro del PC.
+
+La web llama `POST /api/analyze` directamente; `FIGHT_AI_API_URL` se ignora en modo local para no delegar accidentalmente al backend cloud historico.

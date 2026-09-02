@@ -37,6 +37,10 @@ For changes to `qa/cloud-android`, preserve the existing emulator/bootstrap regr
 
 ## Controlled beta status
 
+### Active local-web checkpoint — 2026-09-02
+
+The primary `web/mvp` runtime is now the owner's Windows PC: LAN browser -> local Next.js -> local FFmpeg -> boxing knowledge -> server-side Gemini. Prefer dedicated ports `8787, 8788, 8790, 8899, 3002, 3003`; readiness requires the exact local `/api/health` contract. AWS infrastructure below is historical/optional. AWS deploy and production-smoke workflows must remain manual-only and must not be required for local-web release work. Do not deploy or delete AWS infrastructure unless the user explicitly changes this decision.
+
 As of 2026-09-01, web controlled-beta gates are green. Public HTTPS beta: https://d1ga34t3tjgix2.cloudfront.net
 
 Canonical large-video behavior is private multipart S3 → DynamoDB durable job → ECS worker → 0:00–3:00 FFmpeg stream copy → Gemini. Gemini Files is primary; compact inline Interactions is only a capacity fallback when Files upload cannot create a reusable reference. Do not regress to process-memory-only jobs, request-lifecycle processing, repeated full re-uploads or full HEVC transcoding as the default.

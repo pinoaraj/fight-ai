@@ -1,6 +1,8 @@
 # Grapify / Fight AI — Living Product & Architecture Spec
 
-_Last updated: 2026-08-31_
+_Last updated: 2026-09-02_
+
+> Runtime checkpoint: the canonical web beta now runs on the owner's Windows PC over the private LAN. Local Next.js + FFmpeg + server-side Gemini is the active path. AWS sections remain historical/optional, and AWS workflows stay manual-only. `docs/LOCAL_PC_SERVER.md` defines the authoritative Windows launcher behavior.
 
 ## 1. Product goal
 Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.

@@ -20,15 +20,6 @@ function Refresh-Path {
   $env:Path = "$machine;$user"
 }
 
-function Find-FreePort {
-  param([int[]]$Candidates = @(8787,8788,8790,8899,3002,3003))
-  foreach ($candidate in $Candidates) {
-    $busy = Get-NetTCPConnection -State Listen -LocalPort $candidate -ErrorAction SilentlyContinue
-    if (-not $busy) { return $candidate }
-  }
-  throw "No encontramos un puerto libre entre 8787, 8788, 8790, 8899, 3002 y 3003."
-}
-
 function Ensure-Command($Name, $WingetId, $Label) {
   if (Get-Command $Name -ErrorAction SilentlyContinue) { return }
   if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -51,9 +42,29 @@ Ensure-Command "ffmpeg" "Gyan.FFmpeg" "FFmpeg"
 if (Test-Path (Join-Path $InstallDir ".git")) {
   Write-Host "[1/5] Repo encontrado: $InstallDir" -ForegroundColor Green
   Set-Location $InstallDir
-  git fetch origin
-  git checkout $Branch
-  git pull --ff-only origin $Branch
+  $origin = (git remote get-url origin 2>$null).Trim()
+  if ($LASTEXITCODE -ne 0 -or $origin -notmatch '(^|[/:])pinoaraj/fight-ai(?:\.git)?$') {
+    throw "El repo existente no tiene pinoaraj/fight-ai como origin. No se modificara automaticamente."
+  }
+
+  $trackedChanges = git status --porcelain --untracked-files=no
+  if ($LASTEXITCODE -ne 0) { throw "No se pudo revisar el estado Git local." }
+  $currentBranch = (git branch --show-current).Trim()
+  if ($trackedChanges) {
+    if ($currentBranch -ne $Branch) {
+      throw "Hay cambios locales rastreados en $currentBranch. Guardalos antes de cambiar a $Branch; no se destruyo nada."
+    }
+    Write-Host "[AVISO] Hay cambios locales rastreados. Se conservaran y se omitira la actualizacion Git automatica." -ForegroundColor Yellow
+  } else {
+    git fetch origin $Branch
+    if ($LASTEXITCODE -ne 0) { throw "git fetch fallo; el repo local no fue sobrescrito." }
+    if ($currentBranch -ne $Branch) {
+      git checkout $Branch
+      if ($LASTEXITCODE -ne 0) { throw "No se pudo cambiar de forma segura a $Branch." }
+    }
+    git pull --ff-only origin $Branch
+    if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only fallo; revisa si la rama local divergio. No se hizo reset." }
+  }
 } else {
   if (Test-Path $InstallDir) {
     $items = Get-ChildItem -Force $InstallDir -ErrorAction SilentlyContinue
@@ -63,6 +74,7 @@ if (Test-Path (Join-Path $InstallDir ".git")) {
   }
   Write-Host "[1/5] Clonando Fight AI en $InstallDir..." -ForegroundColor Cyan
   git clone --branch $Branch --single-branch $RepoUrl $InstallDir
+  if ($LASTEXITCODE -ne 0) { throw "No se pudo clonar pinoaraj/fight-ai." }
   Set-Location $InstallDir
 }
 
@@ -87,37 +99,18 @@ if ($needsKey) {
 
 Write-Host "[3/5] Instalando/actualizando dependencias..." -ForegroundColor Cyan
 npm install
+if ($LASTEXITCODE -ne 0) { throw "npm install fallo." }
 
 if (-not $SkipBuild) {
   Write-Host "[4/5] Construyendo Fight AI Web..." -ForegroundColor Cyan
   npm run build
+  if ($LASTEXITCODE -ne 0) { throw "El build de Fight AI fallo." }
 } elseif (-not (Test-Path ".next\BUILD_ID")) {
   throw "No existe un build previo. Ejecuta sin -SkipBuild."
 } else {
   Write-Host "[4/5] Usando build existente." -ForegroundColor DarkGray
 }
 
-$Port = Find-FreePort
-Set-Content -Path ".fight-ai-port" -Value $Port -Encoding ascii
-
-$localIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-  Where-Object {
-    $_.IPAddress -notlike "127.*" -and
-    $_.IPAddress -notlike "169.254.*" -and
-    $_.InterfaceAlias -notmatch "vEthernet|WSL|Loopback"
-  } |
-  Sort-Object InterfaceMetric |
-  Select-Object -First 1 -ExpandProperty IPAddress
-
-Banner "Fight AI listo"
-Write-Host "PC:       http://localhost:$Port" -ForegroundColor Green
-if ($localIp) {
-  Write-Host "Telefono: http://$($localIp):$Port" -ForegroundColor Green
-  Write-Host "          (PC y telefono deben estar en la misma Wi-Fi/LAN)" -ForegroundColor DarkGray
-}
-Write-Host ""
-Write-Host "El servidor quedara abierto en esta ventana. Ctrl+C para detener." -ForegroundColor DarkGray
-Write-Host "[5/5] Iniciando servidor..." -ForegroundColor Cyan
-
-$env:FIGHT_AI_RUNTIME = "local"
-npm run start -- -H 0.0.0.0 -p $Port
+Write-Host "[5/5] Iniciando y verificando el servidor local..." -ForegroundColor Cyan
+& (Join-Path $InstallDir "scripts\start-local.ps1") -SkipBuild
+if ($LASTEXITCODE -ne 0) { throw "Fight AI no pudo iniciar ni pasar /api/health." }

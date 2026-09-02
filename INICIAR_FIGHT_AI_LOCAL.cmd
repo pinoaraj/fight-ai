@@ -5,4 +5,8 @@ if errorlevel 1 (
   echo.
   echo Fight AI no pudo iniciar. Revisa el mensaje anterior.
   pause
+  exit /b 1
 )
+echo.
+echo Fight AI queda ejecutandose en segundo plano. Puedes cerrar esta ventana.
+pause
