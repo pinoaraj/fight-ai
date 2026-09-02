@@ -20,6 +20,15 @@ function Refresh-Path {
   $env:Path = "$machine;$user"
 }
 
+function Find-FreePort {
+  param([int[]]$Candidates = @(3000,3001,3002,3003,8787))
+  foreach ($candidate in $Candidates) {
+    $busy = Get-NetTCPConnection -State Listen -LocalPort $candidate -ErrorAction SilentlyContinue
+    if (-not $busy) { return $candidate }
+  }
+  throw "No encontramos un puerto libre entre 3000, 3001, 3002, 3003 y 8787."
+}
+
 function Ensure-Command($Name, $WingetId, $Label) {
   if (Get-Command $Name -ErrorAction SilentlyContinue) { return }
   if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -88,6 +97,9 @@ if (-not $SkipBuild) {
   Write-Host "[4/5] Usando build existente." -ForegroundColor DarkGray
 }
 
+$Port = Find-FreePort
+Set-Content -Path ".fight-ai-port" -Value $Port -Encoding ascii
+
 $localIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
   Where-Object {
     $_.IPAddress -notlike "127.*" -and
@@ -98,9 +110,9 @@ $localIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
   Select-Object -First 1 -ExpandProperty IPAddress
 
 Banner "Fight AI listo"
-Write-Host "PC:       http://localhost:3000" -ForegroundColor Green
+Write-Host "PC:       http://localhost:$Port" -ForegroundColor Green
 if ($localIp) {
-  Write-Host "Telefono: http://$($localIp):3000" -ForegroundColor Green
+  Write-Host "Telefono: http://$($localIp):$Port" -ForegroundColor Green
   Write-Host "          (PC y telefono deben estar en la misma Wi-Fi/LAN)" -ForegroundColor DarkGray
 }
 Write-Host ""
@@ -108,4 +120,4 @@ Write-Host "El servidor quedara abierto en esta ventana. Ctrl+C para detener." -
 Write-Host "[5/5] Iniciando servidor..." -ForegroundColor Cyan
 
 $env:FIGHT_AI_RUNTIME = "local"
-npm run start -- -H 0.0.0.0 -p 3000
+npm run start -- -H 0.0.0.0 -p $Port
