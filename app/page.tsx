@@ -319,37 +319,116 @@ export default function Home() {
   }
 
   async function uploadDirectlyToS3(file: File) {
-    const start = await fetch('/api/direct-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'start', name: file.name, type: file.type || 'video/mp4' }) });
-    const created = await start.json() as { key?: string; uploadId?: string; error?: string };
-    if (!start.ok || !created.key || !created.uploadId) throw new Error(created.error || 'No se pudo iniciar la carga segura.');
+    const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+    const jsonPost = async <T,>(payload: Record<string, unknown>, attempts = 3): Promise<{ response: Response; data: T }> => {
+      let lastError: unknown = null;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          const response = await fetch('/api/direct-upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const raw = await response.text();
+          let data = {} as T;
+          try { data = raw ? JSON.parse(raw) as T : {} as T; } catch { data = {} as T; }
+          if (response.ok) return { response, data };
+          lastError = new Error((data as { error?: string }).error || `HTTP ${response.status}`);
+          if (response.status < 500 && response.status !== 429) break;
+        } catch (error) {
+          lastError = error;
+        }
+        if (attempt < attempts) await pause(900 * attempt);
+      }
+      throw lastError instanceof Error ? lastError : new Error('No se pudo contactar el servicio de carga.');
+    };
+
+    let created: { key?: string; uploadId?: string; error?: string };
+    try {
+      ({ data: created } = await jsonPost<{ key?: string; uploadId?: string; error?: string }>({
+        action: 'start',
+        name: file.name,
+        type: file.type || 'video/mp4',
+      }));
+    } catch {
+      throw new Error('No pudimos iniciar la carga segura. Revisa tu conexión y vuelve a pulsar ANALIZAR.');
+    }
+    if (!created.key || !created.uploadId) throw new Error(created.error || 'No se pudo iniciar la carga segura.');
+
     const chunkSize = 8 * 1024 * 1024;
     const parts: { ETag: string; PartNumber: number }[] = [];
+    const totalParts = Math.ceil(file.size / chunkSize);
+
     for (let offset = 0, partNumber = 1; offset < file.size; offset += chunkSize, partNumber++) {
-      const sign = await fetch('/api/direct-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'sign', key: created.key, uploadId: created.uploadId, partNumber }) });
-      const signed = await sign.json() as { url?: string; error?: string };
-      if (!sign.ok || !signed.url) throw new Error(signed.error || 'No se pudo preparar una parte del video.');
       const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
       let etag = '';
-      try {
-        const part = await fetch(signed.url, { method: 'PUT', body: chunk, headers: { 'Content-Type': file.type || 'video/mp4' } });
-        etag = part.ok ? (part.headers.get('etag') || '') : '';
-      } catch {
-        etag = '';
+
+      // Mobile networks can reset a single S3 PUT even while the connection is
+      // otherwise healthy. Re-sign and retry the same multipart part before
+      // falling back to the application proxy.
+      for (let attempt = 1; attempt <= 4 && !etag; attempt++) {
+        try {
+          const { data: signed } = await jsonPost<{ url?: string; error?: string }>({
+            action: 'sign',
+            key: created.key,
+            uploadId: created.uploadId,
+            partNumber,
+          }, 2);
+          if (!signed.url) throw new Error(signed.error || 'No se pudo firmar esta parte.');
+          const part = await fetch(signed.url, {
+            method: 'PUT',
+            body: chunk,
+            headers: { 'Content-Type': file.type || 'video/mp4' },
+          });
+          if (part.ok) etag = part.headers.get('etag') || '';
+        } catch {
+          etag = '';
+        }
+        if (!etag && attempt < 4) await pause(1100 * attempt);
       }
+
+      // Keep the same multipart upload alive if the browser/S3 route is blocked
+      // or ETag is not exposed. Proxy is deliberately last resort.
       if (!etag) {
-        const proxy = await fetch(`/api/direct-upload?proxy=1&key=${encodeURIComponent(created.key)}&uploadId=${encodeURIComponent(created.uploadId)}&partNumber=${partNumber}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: chunk,
-        });
-        const proxied = await proxy.json() as { ETag?: string; error?: string };
-        if (!proxy.ok || !proxied.ETag) throw new Error(proxied.error || `No se pudo cargar la parte ${partNumber} del video.`);
-        etag = proxied.ETag;
+        let proxyError = '';
+        for (let attempt = 1; attempt <= 2 && !etag; attempt++) {
+          try {
+            const proxy = await fetch(`/api/direct-upload?proxy=1&key=${encodeURIComponent(created.key)}&uploadId=${encodeURIComponent(created.uploadId)}&partNumber=${partNumber}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: chunk,
+            });
+            const raw = await proxy.text();
+            let proxied: { ETag?: string; error?: string } = {};
+            try { proxied = raw ? JSON.parse(raw) as { ETag?: string; error?: string } : {}; } catch { proxied = {}; }
+            if (proxy.ok && proxied.ETag) etag = proxied.ETag;
+            else proxyError = proxied.error || `HTTP ${proxy.status}`;
+          } catch (error) {
+            proxyError = error instanceof Error ? error.message : 'conexión interrumpida';
+          }
+          if (!etag && attempt < 2) await pause(1400);
+        }
+        if (!etag) {
+          throw new Error(`La carga se interrumpió en la parte ${partNumber} de ${totalParts}. No se perdió tu video local; vuelve a pulsar ANALIZAR con una conexión estable.${proxyError ? ` (${proxyError})` : ''}`);
+        }
       }
+
       parts.push({ ETag: etag, PartNumber: partNumber });
-      setStageFloor(Math.max(0, Math.min(1, Math.floor(((offset + chunkSize) / file.size) * 2))));
+      setStageFloor(Math.max(0, Math.min(1, Math.floor((partNumber / totalParts) * 2))));
     }
-    const complete = await fetch('/api/direct-upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'complete', key: created.key, uploadId: created.uploadId, parts }) });
-    const done = await complete.json() as { key?: string; error?: string };
-    if (!complete.ok || !done.key) throw new Error(done.error || 'No se pudo finalizar la carga segura.');
+
+    let done: { key?: string; error?: string };
+    try {
+      ({ data: done } = await jsonPost<{ key?: string; error?: string }>({
+        action: 'complete',
+        key: created.key,
+        uploadId: created.uploadId,
+        parts,
+      }, 3));
+    } catch {
+      throw new Error('El video llegó a S3, pero no pudimos cerrar la carga. Pulsa ANALIZAR otra vez; no es un error de Gemini.');
+    }
+    if (!done.key) throw new Error(done.error || 'No se pudo finalizar la carga segura.');
     return done.key;
   }
 
@@ -396,7 +475,7 @@ export default function Home() {
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Error inesperado.';
       setError(message === 'Failed to fetch'
-        ? 'La conexión se interrumpió durante la carga. Fight AI intentó recuperar la subida; vuelve a pulsar ANALIZAR si tu conexión ya está estable.'
+        ? 'La conexión se interrumpió antes de que pudiéramos confirmar el siguiente paso. Vuelve a pulsar ANALIZAR cuando la conexión esté estable.'
         : message);
     }
     finally { setBusy(false); }
