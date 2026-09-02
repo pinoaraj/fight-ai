@@ -23,7 +23,7 @@ type UploadedAnalysisSession = {
   context: AnalysisContext;
   timings: PipelineTimings;
 };
-type ServiceHealth = { geminiConfigured?: boolean; analysisReady?: boolean };
+type ServiceHealth = { geminiConfigured?: boolean; analysisReady?: boolean; backendConfigured?: boolean; localMode?: boolean; runtimeMode?: string };
 
 const focusOptions = [
   ['technique','Mejorar boxeo'], ['weaknesses','Detectar debilidades'], ['strategy','Analizar estrategia'],
@@ -449,9 +449,9 @@ export default function Home() {
         anchor_size: anchor ? anchor.size.toFixed(2) : '', anchor_time: anchor ? previewTime.toFixed(2) : '',
       };
       const healthResponse = await fetch('/api/health', { cache: 'no-store' });
-      const health = healthResponse.ok ? await healthResponse.json() as { backendConfigured?: boolean } : {};
+      const health = healthResponse.ok ? await healthResponse.json() as ServiceHealth : {};
       let response: Response;
-      if (health.backendConfigured) {
+      if (health.localMode || health.backendConfigured) {
         const body = new FormData(); body.append('video', video);
         for (const [key, value] of Object.entries(context)) body.append(key, value);
         response = await fetch('/api/analyze', { method: 'POST', body });
@@ -505,8 +505,8 @@ export default function Home() {
   }
 
   return <main>
-    <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO GEMINI…' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
-    <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>Tu video se usa sólo para este análisis.</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
+    <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO MOTOR…' : serviceHealth.localMode && serviceHealth.geminiConfigured ? ' PC LOCAL · GEMINI LISTO' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
+    <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>{serviceHealth?.localMode ? 'Tu PC procesa el video localmente y solo el clip de análisis se envía a Gemini.' : 'Tu video se usa sólo para este análisis.'}</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
     <section className="workflowStrip" aria-label="Progreso del análisis" aria-live="polite">{workflowLabels.map((label,index)=>{ const current=workflowStep===index+1; return <span key={label} className={`${current?'active nextPulse':workflowStep>index+1?'done':''}`}><i>{workflowStep>index+1?'✓':index+1}</i><b>{label}</b>{current && <small>{nextPrompts[index]}</small>}</span>; })}</section>
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Rounds de hasta 3 minutos" />
