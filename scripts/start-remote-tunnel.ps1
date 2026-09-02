@@ -69,11 +69,15 @@ if (-not $publicUrl) {
 }
 
 $unauthorized = $null
-try {
-  Invoke-WebRequest -Uri "$publicUrl/api/health" -TimeoutSec 10 -ErrorAction Stop | Out-Null
-  $unauthorized = 200
-} catch {
-  if ($_.Exception.Response) { $unauthorized = [int]$_.Exception.Response.StatusCode }
+$authDeadline = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $authDeadline -and $unauthorized -ne 401) {
+  try {
+    Invoke-WebRequest -Uri "$publicUrl/api/health" -TimeoutSec 8 -ErrorAction Stop | Out-Null
+    $unauthorized = 200
+  } catch {
+    if ($_.Exception.Response) { $unauthorized = [int]$_.Exception.Response.StatusCode }
+  }
+  if ($unauthorized -ne 401) { Start-Sleep -Seconds 1 }
 }
 if ($unauthorized -ne 401) {
   Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -81,7 +85,15 @@ if ($unauthorized -ne 401) {
 }
 
 $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$username`:$password"))
-$remoteHealth = Invoke-RestMethod -Uri "$publicUrl/api/health" -Headers @{ Authorization = "Basic $encoded" } -TimeoutSec 15
+$remoteHealth = $null
+$healthDeadline = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $healthDeadline -and $null -eq $remoteHealth) {
+  try {
+    $remoteHealth = Invoke-RestMethod -Uri "$publicUrl/api/health" -Headers @{ Authorization = "Basic $encoded" } -TimeoutSec 10
+  } catch {
+    Start-Sleep -Seconds 1
+  }
+}
 if ($remoteHealth.service -ne "fight-ai-web" -or $remoteHealth.analysisReady -ne $true) {
   Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
   throw "El health autenticado del tunel no corresponde a Fight AI."
