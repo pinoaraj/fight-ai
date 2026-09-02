@@ -68,6 +68,10 @@ if (-not $publicUrl) {
   throw "Cloudflare Tunnel no entrego una URL. Revisa .fight-ai-tunnel.err.log."
 }
 
+# Windows puede conservar NXDOMAIN durante los segundos en que Cloudflare registra
+# el subdominio nuevo. Limpiamos solo la cache DNS antes del gate HTTPS.
+Clear-DnsClientCache -ErrorAction SilentlyContinue
+
 $unauthorized = $null
 $authDeadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $authDeadline -and $unauthorized -ne 401) {
