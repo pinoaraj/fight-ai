@@ -12,6 +12,15 @@ Write-Host " Fight AI Web - Servidor local en tu PC" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
+function Find-FreePort {
+  param([int[]]$Candidates = @(3000,3001,3002,3003,8787))
+  foreach ($candidate in $Candidates) {
+    $busy = Get-NetTCPConnection -State Listen -LocalPort $candidate -ErrorAction SilentlyContinue
+    if (-not $busy) { return $candidate }
+  }
+  throw "No encontramos un puerto libre para Fight AI."
+}
+
 function Require-Command($Name, $InstallHint) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
     Write-Host "[ERROR] Falta $Name." -ForegroundColor Red
@@ -57,6 +66,9 @@ if (-not $SkipBuild) {
   Write-Host "[2/3] Usando build existente." -ForegroundColor DarkGray
 }
 
+$Port = Find-FreePort
+Set-Content -Path ".fight-ai-port" -Value $Port -Encoding ascii
+
 $LocalIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
   Where-Object {
     $_.IPAddress -notlike "127.*" -and
@@ -68,9 +80,9 @@ $LocalIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
 
 Write-Host ""
 Write-Host "[3/3] Iniciando servidor..." -ForegroundColor Green
-Write-Host "PC:       http://localhost:3000" -ForegroundColor Green
+Write-Host "PC:       http://localhost:$Port" -ForegroundColor Green
 if ($LocalIp) {
-  Write-Host "Telefono: http://$($LocalIp):3000" -ForegroundColor Green
+  Write-Host "Telefono: http://$($LocalIp):$Port" -ForegroundColor Green
   Write-Host "          (telefono y PC deben estar en la misma Wi-Fi/LAN)" -ForegroundColor DarkGray
 }
 Write-Host ""
@@ -78,4 +90,4 @@ Write-Host "Los videos se procesan temporalmente en este PC y los archivos tempo
 Write-Host "Presiona Ctrl+C para detener el servidor." -ForegroundColor DarkGray
 Write-Host ""
 
-npm run start -- -H 0.0.0.0 -p 3000
+npm run start -- -H 0.0.0.0 -p $Port
