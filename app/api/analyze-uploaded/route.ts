@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NextRequest, NextResponse } from 'next/server';
+import { boxingKnowledgePrompt } from '../../../lib/boxingKnowledge';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -367,7 +368,16 @@ function buildSegmentPrompt(data: UploadedAnalysisRequest, index: number, count:
     val(data,'fighter_notes'),
   ].filter(Boolean).join('; ');
   const languageInstruction = val(data,'language','es') === 'en' ? 'Write the entire report in English.' : 'Escribe todo el reporte en español natural.';
+  const knowledge = boxingKnowledgePrompt([
+    val(data,'analysis_focus','technique,weaknesses,strategy'),
+    val(data,'custom_focus',''),
+    val(data,'fighter_notes',''),
+    val(data,'stance',''),
+    val(data,'sport','boxing'),
+  ].join(' '), 6);
   return 'Actúa como entrenador de boxeo/kickboxing de alto nivel. ' + languageInstruction +
+    '\nMOTOR HÍBRIDO: usa primero hechos visibles del video, contrástalos con la base Fight AI y luego emite una interpretación clínica individual. La base nunca sustituye la evidencia.' +
+    '\n' + knowledge.text +
     '\nEste es el segmento ' + (index + 1) + ' de ' + count + ' del mismo round, aproximadamente desde ' + absoluteTime('00:00', offset) + ' hasta ' + absoluteTime('00:00', offset + duration) + '.' +
     '\nPeleador objetivo: ' + (descriptors || 'peleador identificado por el usuario') + '. Guardia: ' + val(data,'stance','unknown') + '. Disciplina: ' + val(data,'sport','boxing') + '.' +
     '\nFoco: ' + val(data,'analysis_focus','technique,weaknesses,strategy') + '. ' + val(data,'custom_focus','') +
@@ -919,8 +929,20 @@ async function completeAnalysis(
       ? `El usuario marcó al peleador en t=${anchorTime.toFixed(1)}s cerca de x=${val(data,'anchor_x')}%, y=${val(data,'anchor_y')}%, con círculo aproximado ${val(data,'anchor_size','24')}% del ancho. Usa ESE momento como ancla visual y sigue la misma identidad por continuidad temporal.`
       : 'Mantén la identidad usando las características visibles y continuidad temporal.';
     const languageInstruction = val(data,'language','es') === 'en' ? 'Write the entire report in English.' : 'Escribe todo el reporte en español natural.';
+    const knowledge = boxingKnowledgePrompt([
+      val(data,'analysis_focus','technique,weaknesses,strategy'),
+      val(data,'custom_focus',''),
+      val(data,'fighter_notes',''),
+      val(data,'stance',''),
+      val(data,'sport','boxing'),
+    ].join(' '), 6);
 
     const prompt = `Actúa como un entrenador de boxeo/kickboxing de alto nivel haciendo una revisión clínica post-sparring. ${languageInstruction}
+
+MOTOR HÍBRIDO:
+${knowledge.text}
+
+Usa la base solo para acelerar el razonamiento. Cada conclusión final debe estar respaldada por este video y ser específica para este atleta/rival.
 
 VIDEO Y OBJETIVO:
 - Disciplina: ${val(data,'sport','boxing')}.
