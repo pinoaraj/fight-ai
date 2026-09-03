@@ -197,26 +197,46 @@ export default function Home() {
     if (!video) return false;
     const target = videoRef.current ? frameTarget(videoRef.current) : 2;
     let response: Response;
-    if (video.size > 80 * 1024 * 1024) {
+    if (video.size > 24 * 1024 * 1024) {
       const chunkSize = 8 * 1024 * 1024;
       const parts = Math.ceil(video.size / chunkSize);
-      const uploadId = crypto.randomUUID();
+      const uploadId = stagedVideoId || crypto.randomUUID();
       response = new Response(null, { status: 500 });
+
       for (let part = 0; part < parts; part++) {
-        const percent = Math.round((part / parts) * 100);
-        setPreviewError(`Preparando frame compatible… ${percent}% del video transferido.`);
-        response = await fetch(`/api/preview-frame?time=${encodeURIComponent(target.toFixed(2))}&uploadId=${uploadId}&part=${part}&parts=${parts}&totalBytes=${video.size}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/octet-stream' },
-          body: video.slice(part * chunkSize, Math.min(video.size, (part + 1) * chunkSize)),
-        });
+        const completedBefore = part / parts;
+        let sent = false;
+        for (let attempt = 1; attempt <= 3 && !sent; attempt++) {
+          const percent = Math.max(1, Math.min(99, Math.round(completedBefore * 100)));
+          setPreviewError(`Subiendo video al PC para generar el frame… ${percent}% · bloque ${part + 1}/${parts}${attempt > 1 ? ` · reintento ${attempt}/3` : ''}`);
+          try {
+            response = await fetch(`/api/preview-frame?time=${encodeURIComponent(target.toFixed(2))}&uploadId=${encodeURIComponent(uploadId)}&part=${part}&parts=${parts}&totalBytes=${video.size}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: video.slice(part * chunkSize, Math.min(video.size, (part + 1) * chunkSize)),
+              signal: AbortSignal.timeout(60_000),
+            });
+            sent = response.ok;
+          } catch {
+            sent = false;
+          }
+          if (!sent && attempt < 3) await new Promise(resolve => window.setTimeout(resolve, 900 * attempt));
+        }
         if (!response.ok) return false;
+        const percentAfter = Math.round(((part + 1) / parts) * 100);
+        setPreviewError(part === parts - 1
+          ? 'Video recibido. FFmpeg está generando el frame seleccionable…'
+          : `Subiendo video al PC para generar el frame… ${percentAfter}% · bloque ${part + 1}/${parts}`);
       }
-      const staged = response.headers.get('x-fight-ai-staged-video');
-      if (staged) setStagedVideoId(staged);
+      const staged = response.headers.get('x-fight-ai-staged-video') || uploadId;
+      setStagedVideoId(staged);
     } else {
+      setPreviewError('Enviando el video al PC para generar el frame…');
       response = await fetch(`/api/preview-frame?time=${encodeURIComponent(target.toFixed(2))}`, {
-        method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4' }, body: video,
+        method: 'POST',
+        headers: { 'Content-Type': video.type || 'video/mp4' },
+        body: video,
+        signal: AbortSignal.timeout(60_000),
       });
     }
     if (!response.ok) return false;
@@ -224,7 +244,7 @@ export default function Home() {
     if (!frame.size || !frame.type.startsWith('image/')) return false;
     if (fallbackFrameUrl) URL.revokeObjectURL(fallbackFrameUrl);
     setFallbackFrameUrl(URL.createObjectURL(frame));
-    setPreviewReady(true); setPreviewTime(target);
+    setPreviewReady(true); setPreviewTime(target); setPreviewError('');
     return true;
   }
   async function generateCompatibleFrame() {
