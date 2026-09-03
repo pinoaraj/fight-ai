@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { appendFile, mkdir, readFile, rm, stat, unlink } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, rm, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -83,7 +83,12 @@ async function chunkedFrame(req: Request, url: URL, at: number) {
     if (total !== totalBytes) throw new Error('incomplete chunk');
 
     await unlink(assembledPath).catch(() => undefined);
-    for (const path of partPaths) await appendFile(assembledPath, await readFile(path));
+    for (let index = 0; index < partPaths.length; index++) {
+      await pipeline(
+        createReadStream(partPaths[index]),
+        createWriteStream(assembledPath, { flags: index === 0 ? 'w' : 'a' }),
+      );
+    }
     const image = await renderFrame(assembledPath, at);
     await rm(sessionDir, { recursive: true, force: true });
     return new Response(new Uint8Array(image), {
@@ -94,12 +99,15 @@ async function chunkedFrame(req: Request, url: URL, at: number) {
       },
     });
   } catch (error) {
-    await Promise.all([
-      rm(sessionDir, { recursive: true, force: true }).catch(() => undefined),
-      unlink(assembledPath).catch(() => undefined),
-    ]);
+    // Preserve already uploaded chunks on transient failures so the browser can
+    // retry only the failed part instead of restarting a large remote video.
+    await unlink(join(sessionDir, `${part}.part`)).catch(() => undefined);
+    await unlink(assembledPath).catch(() => undefined);
     const isTooLarge = error instanceof Error && error.message === 'video too large';
-    return Response.json({ error: isTooLarge ? 'El video supera el límite para generar un frame compatible.' : 'No se pudo reconstruir el video para generar un frame.' }, { status: isTooLarge ? 413 : 422 });
+    return Response.json(
+      { error: isTooLarge ? 'El video supera el límite para generar un frame compatible.' : 'No se pudo recibir o reconstruir este bloque del video.', retryable: !isTooLarge, part },
+      { status: isTooLarge ? 413 : 422 },
+    );
   }
 }
 
