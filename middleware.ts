@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 function requestHostname(request: NextRequest) {
-  const forwarded = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
-  const raw = forwarded || request.headers.get('host') || request.nextUrl.hostname;
+  // Forwarded headers are supplied by an upstream proxy and can also be forged
+  // by clients. Never use them to decide that a request is trusted/local.
+  const raw = request.headers.get('host') || request.nextUrl.hostname;
   return raw.replace(/^\[|\]$/g, '').split(':')[0].toLowerCase();
 }
 
@@ -14,7 +15,8 @@ function isLocalHostname(hostname: string) {
 }
 
 export function middleware(request: NextRequest) {
-  if (isLocalHostname(requestHostname(request))) return NextResponse.next();
+  const cameThroughCloudflare = request.headers.has('cf-ray') || request.headers.has('cf-connecting-ip');
+  if (!cameThroughCloudflare && isLocalHostname(requestHostname(request))) return NextResponse.next();
 
   const username = (process.env.FIGHT_AI_REMOTE_USER || 'fightai').trim();
   const password = (process.env.FIGHT_AI_REMOTE_PASSWORD || '').trim();

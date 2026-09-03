@@ -53,7 +53,7 @@ $stderrPath = Join-Path $Root ".fight-ai-tunnel.err.log"
 $startedAt = Get-Date
 $npx = (Get-Command npx.cmd).Source
 $process = Start-Process -FilePath $npx `
-  -ArgumentList @("--yes", "wrangler@latest", "tunnel", "quick-start", "http://127.0.0.1:$port") `
+  -ArgumentList @("--yes", "wrangler@4.128.0", "tunnel", "quick-start", "http://127.0.0.1:$port") `
   -WorkingDirectory $Root `
   -RedirectStandardOutput $stdoutPath `
   -RedirectStandardError $stderrPath `
@@ -92,9 +92,16 @@ if (-not $publicIp) {
   throw "El hostname del tunel no aparecio en DNS publico; el tunel fue detenido."
 }
 
-$unauthorized = & curl.exe --silent --show-error --output NUL --write-out "%{http_code}" `
-  --resolve "$publicHost`:443:$publicIp" "$publicUrl/api/health"
-if ($LASTEXITCODE -eq 0 -and $unauthorized -match '^\d{3}$') { $unauthorized = [int]$unauthorized } else { $unauthorized = $null }
+$unauthorized = $null
+$httpDeadline = (Get-Date).AddSeconds(90)
+while ((Get-Date) -lt $httpDeadline -and $unauthorized -ne 401) {
+  $statusText = & curl.exe --silent --show-error --output NUL --write-out "%{http_code}" `
+    --resolve "$publicHost`:443:$publicIp" "$publicUrl/api/health"
+  if ($LASTEXITCODE -eq 0 -and $statusText -match '^\d{3}$') {
+    $unauthorized = [int]$statusText
+  }
+  if ($unauthorized -ne 401) { Start-Sleep -Seconds 2 }
+}
 if ($unauthorized -ne 401) {
   Stop-TunnelAttempt $process $startedAt
   throw "El enlace externo no exigio autenticacion (HTTP $unauthorized); el tunel fue detenido."

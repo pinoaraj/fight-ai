@@ -41,6 +41,32 @@ try {
   }
   if ($externalStatus -ne 503) { throw "Un host externo sin contrasena debia fallar cerrado con HTTP 503; recibio $externalStatus." }
 
+  $forgedForwardedStatus = $null
+  try {
+    Invoke-WebRequest -Uri "http://127.0.0.1:8788/api/health" `
+      -Headers @{ Host = "preview.trycloudflare.com"; "X-Forwarded-Host" = "localhost" } `
+      -TimeoutSec 3 -ErrorAction Stop | Out-Null
+    $forgedForwardedStatus = 200
+  } catch {
+    if ($_.Exception.Response) { $forgedForwardedStatus = [int]$_.Exception.Response.StatusCode }
+  }
+  if ($forgedForwardedStatus -ne 503) {
+    throw "X-Forwarded-Host falsificado no debe saltar autenticacion; recibio HTTP $forgedForwardedStatus."
+  }
+
+  $forgedCloudflareStatus = $null
+  try {
+    Invoke-WebRequest -Uri "http://127.0.0.1:8788/api/health" `
+      -Headers @{ Host = "localhost"; "CF-Ray" = "forged-test" } `
+      -TimeoutSec 3 -ErrorAction Stop | Out-Null
+    $forgedCloudflareStatus = 200
+  } catch {
+    if ($_.Exception.Response) { $forgedCloudflareStatus = [int]$_.Exception.Response.StatusCode }
+  }
+  if ($forgedCloudflareStatus -ne 503) {
+    throw "Una solicitud marcada como Cloudflare no debe tratarse como local; recibio HTTP $forgedCloudflareStatus."
+  }
+
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\stop-local.ps1")
   if ($LASTEXITCODE -ne 0) { throw "stop-local.ps1 rechazo el servidor Fight AI verificado." }
 
