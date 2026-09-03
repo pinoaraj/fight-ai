@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { stat, unlink } from 'node:fs/promises';
+import { readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -181,7 +181,7 @@ function makeCompactCompatibleClip(inputPath: string, outputPath: string) {
 }
 
 
-async function analyzeWithGemini(source: FormData) {
+async function analyzeWithGemini(source: FormData, updateStatus?: (status: string) => void | Promise<void>) {
   const startedAt = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini no está configurado en el servidor local.');
@@ -201,6 +201,7 @@ async function analyzeWithGemini(source: FormData) {
   let processingMs = 0;
 
   try {
+    await updateStatus?.('preprocessing');
     const preprocessingStarted = Date.now();
     if (hasStagedVideo) {
       const staged = await stat(inputPath);
@@ -228,6 +229,7 @@ async function analyzeWithGemini(source: FormData) {
     preprocessingMs = Date.now() - preprocessingStarted;
 
     const mimeType = 'video/mp4';
+    await updateStatus?.('uploading');
     const uploadStarted = Date.now();
     let startUpload: Response | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -273,6 +275,7 @@ async function analyzeWithGemini(source: FormData) {
     const fileName = fileInfo.file?.name; const fileUri = fileInfo.file?.uri;
     if (!fileName || !fileUri) throw new Error('Gemini no devolvió referencia del video.');
 
+    await updateStatus?.('preparing');
     const processingStarted = Date.now();
     let state = fileInfo.file?.state || 'PROCESSING';
     const deadline = Date.now() + 8 * 60_000;
@@ -341,6 +344,7 @@ ESTÁNDAR DE COACHING:
 
 Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.`;
 
+    await updateStatus?.('coaching');
     const analysisStarted = Date.now();
     const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
     const analysisMs = Date.now() - analysisStarted;
@@ -386,11 +390,107 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
   }
 }
 
+
+type LocalJob = {
+  id: string;
+  status: 'queued' | 'preprocessing' | 'uploading' | 'preparing' | 'coaching' | 'complete' | 'failed';
+  updatedAt: number;
+  report?: unknown;
+  error?: string;
+};
+
+function localJobPath(id: string) {
+  return join(tmpdir(), `fight-ai-local-job-${id}.json`);
+}
+
+async function writeLocalJob(job: LocalJob) {
+  await writeFile(localJobPath(job.id), JSON.stringify(job), 'utf8');
+}
+
+async function readLocalJob(id: string): Promise<LocalJob | null> {
+  if (!/^[a-f0-9-]{16,64}$/i.test(id)) return null;
+  try {
+    return JSON.parse(await readFile(localJobPath(id), 'utf8')) as LocalJob;
+  } catch {
+    return null;
+  }
+}
+
+async function prepareLocalAsyncSource(source: FormData) {
+  const prepared = new FormData();
+  for (const [key, value] of source.entries()) {
+    if (key === 'video' || key === 'staged_video_id' || key === 'video_name' || key === 'video_size') continue;
+    if (typeof value === 'string') prepared.append(key, value);
+  }
+
+  const existingStaged = field(source, 'staged_video_id');
+  if (/^[a-f0-9-]{16,64}$/i.test(existingStaged)) {
+    prepared.append('staged_video_id', existingStaged);
+    prepared.append('video_name', field(source, 'video_name', 'fight-ai-sparring.mp4'));
+    prepared.append('video_size', field(source, 'video_size', '0'));
+    return prepared;
+  }
+
+  const video = source.get('video');
+  if (!(video instanceof File) || !video.size) throw new Error('No se recibió un video válido.');
+  const stagedId = randomUUID();
+  const stagedPath = join(tmpdir(), `fight-ai-staged-${stagedId}.mp4`);
+  await pipeline(
+    Readable.fromWeb(video.stream() as import('stream/web').ReadableStream),
+    createWriteStream(stagedPath, { flags: 'wx' }),
+  );
+  prepared.append('staged_video_id', stagedId);
+  prepared.append('video_name', video.name || 'fight-ai-sparring.mp4');
+  prepared.append('video_size', String(video.size));
+  return prepared;
+}
+
+async function runLocalJob(id: string, source: FormData) {
+  const update = async (status: LocalJob['status']) => {
+    await writeLocalJob({ id, status, updatedAt: Date.now() });
+  };
+  try {
+    await update('preprocessing');
+    const report = await analyzeWithGemini(source, async (status) => {
+      if (['preprocessing','uploading','preparing','coaching'].includes(status)) {
+        await update(status as LocalJob['status']);
+      }
+    });
+    await writeLocalJob({ id, status: 'complete', updatedAt: Date.now(), report });
+  } catch (error) {
+    console.error('Fight AI local async analysis error', error);
+    await writeLocalJob({
+      id,
+      status: 'failed',
+      updatedAt: Date.now(),
+      error: error instanceof Error ? error.message : 'No se pudo completar el análisis.',
+    });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const id = new URL(req.url).searchParams.get('id') || '';
+  const job = await readLocalJob(id);
+  if (!job) return NextResponse.json({ error: 'El trabajo local no existe o ya expiró.' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  if (job.status === 'complete') return NextResponse.json({ status: job.status, report: job.report, updatedAt: job.updatedAt }, { headers: { 'Cache-Control': 'no-store' } });
+  if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error, updatedAt: job.updatedAt }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json({ status: job.status, updatedAt: job.updatedAt }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const source = await req.formData();
     const localMode = (process.env.FIGHT_AI_RUNTIME || 'cloud').trim().toLowerCase() === 'local';
     const backend = localMode ? '' : process.env.FIGHT_AI_API_URL?.replace(/\/$/, '');
+
+    if (localMode && new URL(req.url).searchParams.get('async') === '1') {
+      const prepared = await prepareLocalAsyncSource(source);
+      const id = randomUUID();
+      await writeLocalJob({ id, status: 'queued', updatedAt: Date.now() });
+      void runLocalJob(id, prepared);
+      return NextResponse.json({ id, status: 'queued' }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    }
+
     if (!backend) return NextResponse.json(await analyzeWithGemini(source));
     const health = await requestJson(`${backend}/health`) as { asyncJobs?: boolean };
     if (health.asyncJobs) {
