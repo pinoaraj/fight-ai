@@ -124,6 +124,10 @@ if (-not $SkipBuild) {
   Write-Host "[2/3] Construyendo Fight AI Web..." -ForegroundColor Cyan
   npm run build
   if ($LASTEXITCODE -ne 0) { throw "El build de Fight AI fallo." }
+  $sourceRevision = (& git rev-parse HEAD 2>$null | Select-Object -First 1)
+  if ($LASTEXITCODE -eq 0 -and $sourceRevision) {
+    Set-Content -Path ".fight-ai-build-sha" -Value $sourceRevision.Trim() -Encoding ascii
+  }
 } elseif (-not (Test-Path ".next\BUILD_ID")) {
   throw "No existe un build previo. Ejecuta sin -SkipBuild."
 } else {

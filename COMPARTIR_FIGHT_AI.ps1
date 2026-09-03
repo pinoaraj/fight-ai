@@ -24,6 +24,13 @@ function Invoke-FightAiScript([string]$Path, [string[]]$Arguments = @()) {
   }
 }
 
+function Test-BuildMatchesSource {
+  if (-not (Test-Path ".next\BUILD_ID") -or -not (Test-Path ".fight-ai-build-sha")) { return $false }
+  $builtRevision = [string](Get-Content ".fight-ai-build-sha" -ErrorAction SilentlyContinue | Select-Object -First 1)
+  $sourceRevision = (& git rev-parse HEAD 2>$null | Select-Object -First 1)
+  return $LASTEXITCODE -eq 0 -and $sourceRevision -and $builtRevision.Trim() -eq $sourceRevision.Trim()
+}
+
 if (-not (Test-Path ".env.local")) { throw "Falta .env.local." }
 $envText = Get-Content ".env.local" -Raw
 $createdPassword = $false
@@ -47,7 +54,7 @@ if ($createdPassword) {
   }
   Invoke-FightAiScript (Join-Path $Root "scripts\start-local.ps1")
 } elseif (-not $localReady) {
-  $startArguments = if (Test-Path ".next\BUILD_ID") { @("-SkipBuild") } else { @() }
+  $startArguments = if (Test-BuildMatchesSource) { @("-SkipBuild") } else { @() }
   Invoke-FightAiScript (Join-Path $Root "scripts\start-local.ps1") $startArguments
 }
 
