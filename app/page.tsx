@@ -109,6 +109,7 @@ export default function Home() {
   const [previewError, setPreviewError] = useState('');
   const [fallbackFrameUrl, setFallbackFrameUrl] = useState('');
   const [selectionFrameUrl, setSelectionFrameUrl] = useState('');
+  const [stagedVideoId, setStagedVideoId] = useState('');
   const [previewTime, setPreviewTime] = useState(0);
   const [focuses, setFocuses] = useState<string[]>(['technique','weaknesses','strategy']);
   const [focusConfirmed, setFocusConfirmed] = useState(false);
@@ -177,7 +178,8 @@ export default function Home() {
 
   function selectVideo(file: File | null) {
     if (fallbackFrameUrl) URL.revokeObjectURL(fallbackFrameUrl);
-    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewAttempting(false); setPreviewError(''); setFallbackFrameUrl(''); setSelectionFrameUrl(''); setPreviewTime(0); setError(''); setReplayStatus(''); setUploadedSession(null); setFocusConfirmed(false);
+    if (stagedVideoId) void fetch(`/api/preview-frame?uploadId=${encodeURIComponent(stagedVideoId)}`, { method: 'DELETE' }).catch(() => undefined);
+    setVideo(file); setReport(null); setFrames({}); setAnchor(null); setMarking(false); setPreviewReady(false); setPreviewAttempting(false); setPreviewError(''); setFallbackFrameUrl(''); setSelectionFrameUrl(''); setStagedVideoId(''); setPreviewTime(0); setError(''); setReplayStatus(''); setUploadedSession(null); setFocusConfirmed(false);
     if (file) window.setTimeout(() => document.getElementById('fighter-step')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 180);
   }
   function showDemo() { setFrames({}); setReport(demo); window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
@@ -185,9 +187,29 @@ export default function Home() {
   async function requestCompatibleFrame() {
     if (!video) return false;
     const target = videoRef.current ? frameTarget(videoRef.current) : 2;
-    const response = await fetch(`/api/preview-frame?time=${encodeURIComponent(target.toFixed(2))}`, {
-      method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4' }, body: video,
-    });
+    let response: Response;
+    if (video.size > 80 * 1024 * 1024) {
+      const chunkSize = 8 * 1024 * 1024;
+      const parts = Math.ceil(video.size / chunkSize);
+      const uploadId = crypto.randomUUID();
+      response = new Response(null, { status: 500 });
+      for (let part = 0; part < parts; part++) {
+        const percent = Math.round((part / parts) * 100);
+        setPreviewError(`Preparando frame compatible… ${percent}% del video transferido.`);
+        response = await fetch(`/api/preview-frame?time=${encodeURIComponent(target.toFixed(2))}&uploadId=${uploadId}&part=${part}&parts=${parts}&totalBytes=${video.size}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: video.slice(part * chunkSize, Math.min(video.size, (part + 1) * chunkSize)),
+        });
+        if (!response.ok) return false;
+      }
+      const staged = response.headers.get('x-fight-ai-staged-video');
+      if (staged) setStagedVideoId(staged);
+    } else {
+      response = await fetch(`/api/preview-frame?time=${encodeURIComponent(target.toFixed(2))}`, {
+        method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4' }, body: video,
+      });
+    }
     if (!response.ok) return false;
     const frame = await response.blob();
     if (!frame.size || !frame.type.startsWith('image/')) return false;
@@ -452,7 +474,14 @@ export default function Home() {
       const health = healthResponse.ok ? await healthResponse.json() as ServiceHealth : {};
       let response: Response;
       if (health.localMode || health.backendConfigured) {
-        const body = new FormData(); body.append('video', video);
+        const body = new FormData();
+        if (stagedVideoId) {
+          body.append('staged_video_id', stagedVideoId);
+          body.append('video_name', video.name || 'fight-ai-sparring.mp4');
+          body.append('video_size', String(video.size));
+        } else {
+          body.append('video', video);
+        }
         for (const [key, value] of Object.entries(context)) body.append(key, value);
         response = await fetch('/api/analyze', { method: 'POST', body });
       } else {

@@ -186,20 +186,33 @@ async function analyzeWithGemini(source: FormData) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini no está configurado en el servidor local.');
   const video = source.get('video');
-  if (!(video instanceof File) || !video.size) throw new Error('No se recibió un video válido.');
+  const stagedVideoId = field(source, 'staged_video_id');
+  const hasStagedVideo = /^[a-f0-9-]{16,64}$/i.test(stagedVideoId);
+  if (!hasStagedVideo && (!(video instanceof File) || !video.size)) throw new Error('No se recibió un video válido.');
 
-  const inputPath = join(tmpdir(), `fight-ai-local-source-${randomUUID()}.mp4`);
+  const inputPath = hasStagedVideo
+    ? join(tmpdir(), `fight-ai-staged-${stagedVideoId}.mp4`)
+    : join(tmpdir(), `fight-ai-local-source-${randomUUID()}.mp4`);
   const clipPath = join(tmpdir(), `fight-ai-local-round-${randomUUID()}.mp4`);
+  const videoName = hasStagedVideo ? field(source, 'video_name', 'fight-ai-sparring.mp4') : (video as File).name || 'fight-ai-sparring.mp4';
+  let originalSize = hasStagedVideo ? Number(field(source, 'video_size', '0')) || 0 : (video as File).size;
   let preprocessingMs = 0;
   let uploadMs = 0;
   let processingMs = 0;
 
   try {
     const preprocessingStarted = Date.now();
-    await pipeline(
-      Readable.fromWeb(video.stream() as import('stream/web').ReadableStream),
-      createWriteStream(inputPath, { flags: 'wx' }),
-    );
+    if (hasStagedVideo) {
+      const staged = await stat(inputPath);
+      if (!staged.size || staged.size > 750 * 1024 * 1024) throw new Error('El video preparado no es válido o expiró. Genera nuevamente el frame compatible.');
+      originalSize = staged.size;
+    } else {
+      const uploadedVideo = video as File;
+      await pipeline(
+        Readable.fromWeb(uploadedVideo.stream() as import('stream/web').ReadableStream),
+        createWriteStream(inputPath, { flags: 'wx' }),
+      );
+    }
     await makeThreeMinuteClip(inputPath, clipPath);
     let clip = await stat(clipPath);
     if (!clip.size) throw new Error('El clip local de 3 minutos quedó vacío.');
@@ -228,7 +241,7 @@ async function analyzeWithGemini(source: FormData) {
           'X-Goog-Upload-Header-Content-Type': mimeType,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ file: { display_name: `local-3min-${video.name || 'fight-ai-sparring.mp4'}`.slice(0, 160) } }),
+        body: JSON.stringify({ file: { display_name: `local-3min-${videoName}`.slice(0, 160) } }),
         cache: 'no-store',
         signal: AbortSignal.timeout(45_000),
       });
@@ -359,7 +372,7 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
         gemini_processing_ms: processingMs,
         analysis_ms: analysisMs,
         total_ms: Date.now() - startedAt,
-        original_size_bytes: video.size,
+        original_size_bytes: originalSize,
         processed_size_bytes: clip.size,
         clip_count: 1,
       },
