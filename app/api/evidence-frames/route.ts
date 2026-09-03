@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { unlink } from 'node:fs/promises';
+import { stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -41,6 +41,33 @@ function renderFrame(filePath: string, at: number) {
   });
 }
 
+async function framesFromPath(filePath: string, times: number[]) {
+  const info = await stat(filePath);
+  if (!info.size || info.size > MAX_VIDEO_BYTES) throw new Error('video too large');
+  const images = await Promise.all(times.map(async (time) => [String(time), (await renderFrame(filePath, time)).toString('base64')] as const));
+  return Object.fromEntries(images.map(([time, image]) => [time, `data:image/jpeg;base64,${image}`]));
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const times = requestedTimes(url.searchParams.get('times'));
+  const stagedVideoId = url.searchParams.get('stagedVideoId') || '';
+  if (!times.length) return Response.json({ error: 'Faltan timestamps de evidencia.' }, { status: 400 });
+  if (!/^[a-f0-9-]{16,64}$/i.test(stagedVideoId)) return Response.json({ error: 'Falta un video preparado válido.' }, { status: 400 });
+
+  const stagedPath = join(tmpdir(), `fight-ai-staged-${stagedVideoId}.mp4`);
+  try {
+    const frames = await framesFromPath(stagedPath, times);
+    return Response.json({ frames }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return Response.json({ error: 'El video preparado ya no está disponible.' }, { status: 404 });
+    }
+    return Response.json({ error: message === 'video too large' ? 'El video supera el límite para generar evidencias.' : 'No se pudieron generar las capturas de evidencia.' }, { status: message === 'video too large' ? 413 : 422 });
+  }
+}
+
 /**
  * Evidence thumbnails are generated server-side when a browser cannot paint
  * the source codec (for example HEVC Main 10). Each returned image is a JPEG
@@ -66,8 +93,8 @@ export async function POST(req: Request) {
   });
   try {
     await pipeline(Readable.fromWeb(req.body as import('stream/web').ReadableStream), meter, createWriteStream(temporaryPath, { flags: 'wx' }));
-    const images = await Promise.all(times.map(async (time) => [String(time), (await renderFrame(temporaryPath, time)).toString('base64')] as const));
-    return Response.json({ frames: Object.fromEntries(images.map(([time, image]) => [time, `data:image/jpeg;base64,${image}`])) }, { headers: { 'Cache-Control': 'no-store' } });
+    const frames = await framesFromPath(temporaryPath, times);
+    return Response.json({ frames }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const isTooLarge = error instanceof Error && error.message === 'video too large';
     return Response.json({ error: isTooLarge ? 'El video supera el límite para generar evidencias.' : 'No se pudieron generar las capturas de evidencia.' }, { status: isTooLarge ? 413 : 422 });
