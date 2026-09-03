@@ -306,6 +306,64 @@ export default function Home() {
     return data;
   }
 
+
+  async function stageVideoForLocalJob(file: File) {
+    if (stagedVideoId) return stagedVideoId;
+    const chunkSize = 8 * 1024 * 1024;
+    const parts = Math.ceil(file.size / chunkSize);
+    const uploadId = crypto.randomUUID();
+    let finalResponse: Response | null = null;
+    for (let part = 0; part < parts; part++) {
+      setStageFloor(0);
+      const response = await fetch(`/api/preview-frame?time=2&uploadId=${encodeURIComponent(uploadId)}&part=${part}&parts=${parts}&totalBytes=${file.size}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file.slice(part * chunkSize, Math.min(file.size, (part + 1) * chunkSize)),
+      });
+      if (!response.ok) {
+        let message = '';
+        try { message = ((await response.json()) as { error?: string }).error || ''; } catch { /* ignore */ }
+        throw new Error(message || `No se pudo preparar el video para análisis (HTTP ${response.status}).`);
+      }
+      finalResponse = response;
+    }
+    const staged = finalResponse?.headers.get('x-fight-ai-staged-video') || uploadId;
+    setStagedVideoId(staged);
+    return staged;
+  }
+
+  async function requestLocalAnalysis(body: FormData) {
+    const started = await fetch('/api/analyze?async=1', { method: 'POST', body });
+    const startRaw = await started.text();
+    let startData: { id?: string; error?: string } | null = null;
+    try { startData = startRaw ? JSON.parse(startRaw) as { id?: string; error?: string } : null; } catch { startData = null; }
+    if (!started.ok) throw new Error(startData?.error || `No se pudo iniciar el análisis (HTTP ${started.status}).`);
+    if (!startData?.id) throw new Error('El servidor local no devolvió un jobId.');
+
+    const deadline = Date.now() + 25 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => window.setTimeout(resolve, 2500));
+      let response: Response;
+      try {
+        response = await fetch(`/api/analyze?id=${encodeURIComponent(startData.id)}`, { cache: 'no-store' });
+      } catch {
+        continue;
+      }
+      const raw = await response.text();
+      let data: { status?: string; report?: Report; error?: string; updatedAt?: number } | null = null;
+      try { data = raw ? JSON.parse(raw) as { status?: string; report?: Report; error?: string; updatedAt?: number } : null; } catch { data = null; }
+      if (data?.status === 'complete' && data.report) return data.report;
+      if (data?.status === 'failed') throw new Error(data.error || 'No se pudo completar el análisis.');
+      if (!response.ok && response.status !== 202) throw new Error(data?.error || `No se pudo consultar el análisis (HTTP ${response.status}).`);
+
+      if (data?.status === 'preprocessing') setStageFloor(1);
+      else if (data?.status === 'uploading' || data?.status === 'preparing') setStageFloor(2);
+      else if (data?.status === 'coaching') setStageFloor(4);
+      else setStageFloor(1);
+    }
+    throw new Error('El análisis superó 25 minutos. El servidor local dejó el job registrado para diagnóstico.');
+  }
+
   async function requestUploadedAnalysis(session: UploadedAnalysisSession) {
     const started = await fetch('/api/analyze-uploaded?async=1' + (session.jobId ? '&retry=1' : ''), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -482,15 +540,19 @@ export default function Home() {
       const healthResponse = await fetch('/api/health', { cache: 'no-store' });
       const health = healthResponse.ok ? await healthResponse.json() as ServiceHealth : {};
       let response: Response;
-      if (health.localMode || health.backendConfigured) {
+      if (health.localMode) {
+        const stagedId = await stageVideoForLocalJob(video);
         const body = new FormData();
-        if (stagedVideoId) {
-          body.append('staged_video_id', stagedVideoId);
-          body.append('video_name', video.name || 'fight-ai-sparring.mp4');
-          body.append('video_size', String(video.size));
-        } else {
-          body.append('video', video);
-        }
+        body.append('staged_video_id', stagedId);
+        body.append('video_name', video.name || 'fight-ai-sparring.mp4');
+        body.append('video_size', String(video.size));
+        for (const [key, value] of Object.entries(context)) body.append(key, value);
+        const data = await requestLocalAnalysis(body);
+        setStageFloor(5); setReport(data); setUploadedSession(null);
+        window.setTimeout(() => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+        return;
+      } else if (health.backendConfigured) {
+        const body = new FormData(); body.append('video', video);
         for (const [key, value] of Object.entries(context)) body.append(key, value);
         response = await fetch('/api/analyze', { method: 'POST', body });
       } else {
