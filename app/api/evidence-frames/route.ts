@@ -44,8 +44,17 @@ function renderFrame(filePath: string, at: number) {
 async function framesFromPath(filePath: string, times: number[]) {
   const info = await stat(filePath);
   if (!info.size || info.size > MAX_VIDEO_BYTES) throw new Error('video too large');
-  const images = await Promise.all(times.map(async (time) => [String(time), (await renderFrame(filePath, time)).toString('base64')] as const));
-  return Object.fromEntries(images.map(([time, image]) => [time, `data:image/jpeg;base64,${image}`]));
+  const settled = await Promise.allSettled(times.map(async (time) => {
+    const image = await renderFrame(filePath, time);
+    return [String(time), `data:image/jpeg;base64,${image.toString('base64')}`] as const;
+  }));
+  const frames: Record<string,string> = {};
+  const failed: string[] = [];
+  settled.forEach((result, index) => {
+    if (result.status === 'fulfilled') frames[result.value[0]] = result.value[1];
+    else failed.push(String(times[index]));
+  });
+  return { frames, failed };
 }
 
 export async function GET(req: Request) {
@@ -57,8 +66,8 @@ export async function GET(req: Request) {
 
   const stagedPath = join(tmpdir(), `fight-ai-staged-${stagedVideoId}.mp4`);
   try {
-    const frames = await framesFromPath(stagedPath, times);
-    return Response.json({ frames }, { headers: { 'Cache-Control': 'no-store' } });
+    const result = await framesFromPath(stagedPath, times);
+    return Response.json(result, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
@@ -93,8 +102,8 @@ export async function POST(req: Request) {
   });
   try {
     await pipeline(Readable.fromWeb(req.body as import('stream/web').ReadableStream), meter, createWriteStream(temporaryPath, { flags: 'wx' }));
-    const frames = await framesFromPath(temporaryPath, times);
-    return Response.json({ frames }, { headers: { 'Cache-Control': 'no-store' } });
+    const result = await framesFromPath(temporaryPath, times);
+    return Response.json(result, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     const isTooLarge = error instanceof Error && error.message === 'video too large';
     return Response.json({ error: isTooLarge ? 'El video supera el límite para generar evidencias.' : 'No se pudieron generar las capturas de evidencia.' }, { status: isTooLarge ? 413 : 422 });
