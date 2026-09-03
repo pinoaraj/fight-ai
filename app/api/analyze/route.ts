@@ -384,7 +384,10 @@ Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponen
     };
   } finally {
     await Promise.all([
-      unlink(inputPath).catch(() => undefined),
+      // A staged source is reused after coaching to render the report's real
+      // evidence thumbnails. It is cleaned when the user replaces the video
+      // or the preview session is explicitly deleted.
+      hasStagedVideo ? Promise.resolve() : unlink(inputPath).catch(() => undefined),
       unlink(clipPath).catch(() => undefined),
     ]);
   }
