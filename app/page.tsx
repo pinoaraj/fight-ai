@@ -157,13 +157,19 @@ export default function Home() {
         for (const e of report.evidence) next[e.time] = await captureFrame(reportVideoSrc, seconds(e.time));
       }
       const missing = report.evidence.filter((e) => !next[e.time]);
-      // HEVC Main 10 and some phone codecs cannot be painted by Chrome. Ask
-      // FFmpeg for the exact report timestamps so printed PDF evidence stays real.
+      // HEVC Main 10 and remote beta browsers may not paint the original codec.
+      // In local mode reuse the already-staged source on the PC so Cloudflare
+      // never has to receive the full video again just for report thumbnails.
       if (missing.length && video && report.mode === 'real') {
         try {
-          const response = await fetch(`/api/evidence-frames?times=${encodeURIComponent(missing.map((e) => seconds(e.time)).join(','))}`, {
-            method: 'POST', headers: { 'Content-Type': video.type || 'video/mp4' }, body: video,
-          });
+          const query = `times=${encodeURIComponent(missing.map((e) => seconds(e.time)).join(','))}`;
+          const response = stagedVideoId
+            ? await fetch(`/api/evidence-frames?${query}&stagedVideoId=${encodeURIComponent(stagedVideoId)}`, { cache: 'no-store' })
+            : await fetch(`/api/evidence-frames?${query}`, {
+                method: 'POST',
+                headers: { 'Content-Type': video.type || 'video/mp4' },
+                body: video,
+              });
           const data = response.ok ? await response.json() as { frames?: Record<string,string> } : null;
           for (const evidence of missing) {
             const frame = data?.frames?.[String(seconds(evidence.time))];
@@ -174,7 +180,7 @@ export default function Home() {
       if (!cancelled) setFrames(next);
     })();
     return () => { cancelled = true; };
-  }, [report, reportVideoSrc, video, fallbackFrameUrl]);
+  }, [report, reportVideoSrc, video, fallbackFrameUrl, stagedVideoId]);
 
   function selectVideo(file: File | null) {
     if (fallbackFrameUrl) URL.revokeObjectURL(fallbackFrameUrl);
