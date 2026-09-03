@@ -158,26 +158,36 @@ export default function Home() {
       }
       const missing = report.evidence.filter((e) => !next[e.time]);
       // HEVC Main 10 and remote beta browsers may not paint the original codec.
-      // In local mode reuse the already-staged source on the PC so Cloudflare
-      // never has to receive the full video again just for report thumbnails.
+      // Render each missing timestamp independently from the staged PC copy.
+      // This avoids one hard frame blocking every other report image.
       if (missing.length && video && report.mode === 'real') {
-        try {
-          const query = `times=${encodeURIComponent(missing.map((e) => seconds(e.time)).join(','))}`;
-          const response = stagedVideoId
-            ? await fetch(`/api/evidence-frames?${query}&stagedVideoId=${encodeURIComponent(stagedVideoId)}`, { cache: 'no-store' })
-            : await fetch(`/api/evidence-frames?${query}`, {
-                method: 'POST',
-                headers: { 'Content-Type': video.type || 'video/mp4' },
-                body: video,
-              });
-          const data = response.ok ? await response.json() as { frames?: Record<string,string> } : null;
-          for (const evidence of missing) {
-            const frame = data?.frames?.[String(seconds(evidence.time))];
-            if (frame) next[evidence.time] = frame;
+        for (const evidence of missing) {
+          if (cancelled) break;
+          const timeValue = seconds(evidence.time);
+          let resolved = '';
+          for (let attempt = 1; attempt <= 2 && !resolved; attempt++) {
+            try {
+              const query = `times=${encodeURIComponent(String(timeValue))}`;
+              const response = stagedVideoId
+                ? await fetch(`/api/evidence-frames?${query}&stagedVideoId=${encodeURIComponent(stagedVideoId)}`, { cache: 'no-store', signal: AbortSignal.timeout(55_000) })
+                : await fetch(`/api/evidence-frames?${query}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': video.type || 'video/mp4' },
+                    body: video,
+                    signal: AbortSignal.timeout(55_000),
+                  });
+              const data = response.ok ? await response.json() as { frames?: Record<string,string> } : null;
+              resolved = data?.frames?.[String(timeValue)] || '';
+            } catch { /* retry this timestamp once */ }
+            if (!resolved && attempt < 2) await new Promise(resolve => window.setTimeout(resolve, 700));
           }
-        } catch { /* The report remains truthful and shows a pending capture. */ }
+          if (resolved) {
+            next[evidence.time] = resolved;
+            if (!cancelled) setFrames(current => ({ ...current, [evidence.time]: resolved }));
+          }
+        }
       }
-      if (!cancelled) setFrames(next);
+      if (!cancelled) setFrames(current => ({ ...current, ...next }));
     })();
     return () => { cancelled = true; };
   }, [report, reportVideoSrc, video, fallbackFrameUrl, stagedVideoId]);
