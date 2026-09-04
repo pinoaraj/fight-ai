@@ -1,0 +1,88 @@
+name: Web MVP CI
+
+on:
+  push:
+    branches: [web/mvp]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: web-mvp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+      - name: Install
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
+
+      - name: Shared-backend adapter + web runtime QA
+        run: |
+          set -euo pipefail
+          python qa/web-agent/mock_backend.py >/tmp/mock-backend.log 2>&1 &
+          MOCK_PID=$!
+          FIGHT_AI_API_URL=http://127.0.0.1:8787 npm run start >/tmp/fight-ai-web.log 2>&1 &
+          WEB_PID=$!
+          trap 'kill $WEB_PID $MOCK_PID >/dev/null 2>&1 || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/health >/tmp/health.json; then break; fi
+            sleep 1
+          done
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
+          if (health.ok !== true || health.service !== 'fight-ai-web') throw new Error('health payload invalid');
+          if (health.backendConfigured !== true || health.analysisReady !== true) throw new Error('backend readiness flags invalid');
+          if (health.providerAttributionPolicy !== 'usedInReport-required') throw new Error('provider attribution policy missing');
+          NODE
+
+          printf 'fake-video' >/tmp/fight-ai-smoke.mp4
+          curl --fail --silent \
+            -F 'video=@/tmp/fight-ai-smoke.mp4;type=video/mp4' \
+            -F 'language=es' \
+            -F 'sport=boxing' \
+            -F 'athlete_marker=red_gloves' \
+            -F 'stance=orthodox' \
+            http://127.0.0.1:3000/api/analyze >/tmp/report.json
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('/tmp/report.json', 'utf8'));
+          if (report.mode !== 'real') throw new Error('adapter mode mismatch');
+          if (report.provider !== 'CV / Pose' || report.usedInReport !== false) throw new Error('provider attribution mismatch');
+          if (report.summary !== 'Mock backend contract OK') throw new Error('shared-backend summary mismatch');
+          if (!Array.isArray(report.evidence) || report.evidence.length < 2) throw new Error('timestamp evidence normalization failed');
+          if (!Array.isArray(report.drills) || !report.drills[0]?.includes('Jab-reset')) throw new Error('drill normalization failed');
+          NODE
+
+      - name: Install virtual agent browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Virtual web agents — desktop + mobile journeys
+        run: |
+          set -euo pipefail
+          python qa/web-agent/mock_backend.py >/tmp/agent-mock-backend.log 2>&1 &
+          MOCK_PID=$!
+          FIGHT_AI_API_URL=http://127.0.0.1:8787 npm run start >/tmp/agent-fight-ai-web.log 2>&1 &
+          WEB_PID=$!
+          trap 'kill $WEB_PID $MOCK_PID >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/health >/dev/null; then break; fi
+            sleep 1
+          done
+          npm run qa:agent
+
+      - name: Production container build
+        run: docker build -t fight-ai-web:${{ github.sha }} .

@@ -1,0 +1,65 @@
+name: Web Local PC CI
+
+on:
+  push:
+    branches: [web/mvp, feature/hybrid-coach-engine]
+  pull_request:
+    branches: [web/mvp]
+  workflow_dispatch:
+
+concurrency:
+  group: web-local-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FIGHT_AI_RUNTIME: local
+      GEMINI_API_KEY: test-placeholder-not-used-during-build
+      GEMINI_MODEL: gemini-3.6-flash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+      - name: Verify FFmpeg
+        run: ffmpeg -version | head -1
+      - name: Install
+        run: npm install
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Next production build
+        run: npm run build
+
+  windows-launcher:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      FIGHT_AI_RUNTIME: local
+      GEMINI_API_KEY: test-placeholder-not-used-during-build
+      GEMINI_MODEL: gemini-3.6-flash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Install
+        run: npm install
+      - name: Build local runtime
+        run: npm run build
+      - name: Create non-secret local test configuration
+        shell: pwsh
+        run: |
+          @"
+          FIGHT_AI_RUNTIME=local
+          GEMINI_API_KEY=test-placeholder-not-used-during-build
+          GEMINI_MODEL=gemini-3.6-flash
+          FIGHT_AI_API_URL=
+          "@ | Set-Content .env.local
+      - name: Verify dedicated-port fallback and safe stop
+        shell: powershell
+        run: .\qa\local-port-safety.ps1

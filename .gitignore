@@ -1,0 +1,15 @@
+.env.local
+.fight-ai-port
+.fight-ai-pid
+.fight-ai-build-sha
+.fight-ai-server-*.out.log
+.fight-ai-server-*.err.log
+.fight-ai-tunnel-url
+.fight-ai-tunnel-pid
+.fight-ai-tunnel.out.log
+.fight-ai-tunnel.err.log
+.next/
+node_modules/
+test-results/
+playwright-report/
+*.tsbuildinfo
