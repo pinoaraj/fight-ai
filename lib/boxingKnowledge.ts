@@ -1,13 +1,14 @@
 export type BoxingKnowledgeRegion = 'UNIVERSAL' | 'USA' | 'UK' | 'RESEARCH';
 export type BoxingKnowledgeDomain =
   | 'STANCE' | 'GUARD' | 'FOOTWORK' | 'DISTANCE' | 'OFFENSE' | 'DEFENSE'
-  | 'COUNTERING' | 'ENTRY' | 'EXIT' | 'FEINTS' | 'BALANCE' | 'TACTICS' | 'BODY_ATTACK';
+  | 'COUNTERING' | 'ENTRY' | 'EXIT' | 'FEINTS' | 'BALANCE' | 'TACTICS' | 'BODY_ATTACK'
+  | 'SCORING' | 'RINGCRAFT' | 'FATIGUE';
 
 export type BoxingKnowledgeSource = {
   authority: string;
   url: string;
-  kind: 'official_coaching' | 'peer_reviewed';
-  evidence: 'coaching_standard' | 'systematic_review' | 'elite_biomechanics' | 'biomechanics';
+  kind: 'official_coaching' | 'official_rules' | 'peer_reviewed';
+  evidence: 'coaching_standard' | 'competition_rules' | 'systematic_review' | 'elite_biomechanics' | 'biomechanics' | 'physiology' | 'fatigue_biomechanics';
   note: string;
 };
 
@@ -23,13 +24,14 @@ export type BoxingKnowledgeEntry = {
   sourceIds: (keyof typeof BOXING_KNOWLEDGE_SOURCES)[];
 };
 
-export const BOXING_KNOWLEDGE_VERSION = '2026.09.04-v2';
+export const BOXING_KNOWLEDGE_VERSION = '2026.09.04-v3';
 
 // Hybrid provenance policy:
-// - Official boxing bodies define coachable technical/tactical fundamentals.
-// - Peer-reviewed university / institute research supports biomechanical claims.
+// - Official boxing bodies define coachable technical/tactical fundamentals and competition criteria.
+// - Peer-reviewed university / institute research supports biomechanical and physiological claims.
 // - Research never creates a diagnosis by itself; the video must show the cue.
 // - National labels are not used as technique stereotypes.
+// - Fight AI does not infer scores, fatigue or punch metrics unless the video provides enough visible evidence.
 export const BOXING_KNOWLEDGE_SOURCES = {
   IBA_COACH_MANUAL: {
     authority: 'International Boxing Association (IBA) Coaches Manual',
@@ -52,6 +54,13 @@ export const BOXING_KNOWLEDGE_SOURCES = {
     evidence: 'coaching_standard',
     note: 'USA Boxing describes trusted education resources for boxing fundamentals, advanced strategy, match review and high-performance preparation.',
   },
+  WORLD_BOXING_RULES: {
+    authority: 'World Boxing Competition Rules — Judging a Bout',
+    url: 'https://worldboxing.org/wp-content/uploads/2024/11/World-Boxing-Competition-Rules-Nov-2024-Approved.pdf',
+    kind: 'official_rules',
+    evidence: 'competition_rules',
+    note: 'Defines scoring priority around scoring blows, technical/tactical superiority and competitiveness; forward movement alone is not automatically effective aggression.',
+  },
   INSEP_LJMU_ELITE_PUNCHING: {
     authority: 'INSEP + Liverpool John Moores University — Dinu & Louis (2020)',
     url: 'https://pubmed.ncbi.nlm.nih.gov/33345181/',
@@ -72,6 +81,27 @@ export const BOXING_KNOWLEDGE_SOURCES = {
     kind: 'peer_reviewed',
     evidence: 'systematic_review',
     note: 'Cross-study synthesis of upper-limb strike mechanics; used only for general biomechanical context, never to fabricate Fight AI punch metrics.',
+  },
+  BOXING_ACUTE_RESPONSES_REVIEW: {
+    authority: 'Edge Hill University — acute responses to amateur boxing systematic review/meta-analysis (2022/2023)',
+    url: 'https://pubmed.ncbi.nlm.nih.gov/35380916/',
+    kind: 'peer_reviewed',
+    evidence: 'physiology',
+    note: 'Systematic review of 25 studies showing substantial physiological demands while cautioning that task-specific performance does not necessarily deteriorate after boxing activity.',
+  },
+  LOWER_BODY_FATIGUE_PUNCHING: {
+    authority: 'Highly-trained boxer lower-body fatigue and punch-force study (2021)',
+    url: 'https://pubmed.ncbi.nlm.nih.gov/33858296/',
+    kind: 'peer_reviewed',
+    evidence: 'fatigue_biomechanics',
+    note: 'Reports lower punch force and rate-of-force-development after fatiguing exercise, supporting lower-body/trunk contribution while not justifying visual fatigue diagnosis by clock time alone.',
+  },
+  LOWER_LIMB_KINETICS_FATIGUE_2025: {
+    authority: 'Ningbo University + University of the West of Scotland + Hong Kong Baptist University — lower-limb kinetics and fatigue in boxing (2025)',
+    url: 'https://pubmed.ncbi.nlm.nih.gov/41463652/',
+    kind: 'peer_reviewed',
+    evidence: 'fatigue_biomechanics',
+    note: 'Force-platform study reporting fatigue-related punch-force reductions and individual variability across punch types; used to support cautious kinetic-chain hypotheses.',
   },
   PLANTAR_PRESSURE_BOXING_2026: {
     authority: 'Wearable Sensor-Based Analysis of Punch Acceleration and Plantar Pressure Distribution in Boxing (2026)',
@@ -183,6 +213,61 @@ export const BOXING_KNOWLEDGE: BoxingKnowledgeEntry[] = [
     sourceIds: ['IBA_COACH_MANUAL','ENGLAND_BOXING_L1'],
   },
   {
+    id: 'effective-pressure-not-forward-only',
+    title: 'Presionar con efecto, no solo avanzar',
+    domains: ['TACTICS','RINGCRAFT','SCORING','DEFENSE','OFFENSE'],
+    regions: ['UNIVERSAL'],
+    observableCues: ['avanza pero no conecta limpio', 'persigue en línea recta', 'presiona recibiendo los golpes más claros', 'rival dicta las salidas'],
+    consequence: 'Ocupar terreno sin convertirlo en golpes claros, control técnico o ventaja posicional puede parecer iniciativa sin producir superioridad efectiva.',
+    correction: 'Hacer que la presión produzca una consecuencia visible: cerrar una salida, forzar reacción, conectar limpio o defender y responder antes de volver a avanzar.',
+    drill: 'Ring-cutting condicionado: puntúa solo cuando la presión termina en golpe limpio, defensa-contra o cierre de salida; 3×2 min.',
+    sourceIds: ['WORLD_BOXING_RULES','IBA_COACH_MANUAL'],
+  },
+  {
+    id: 'ring-control-through-position-and-rhythm',
+    title: 'Controlar posición, ritmo y reacciones del rival',
+    domains: ['TACTICS','RINGCRAFT','SCORING','FOOTWORK'],
+    regions: ['UNIVERSAL'],
+    observableCues: ['rival decide siempre dónde intercambiar', 'sigue al rival sin cortar ángulo', 'acepta el ritmo del rival', 'pierde centro o salida sin respuesta'],
+    consequence: 'El atleta puede trabajar mucho sin imponer dónde, cuándo y en qué condiciones ocurren los intercambios.',
+    correction: 'Usar desplazamiento, jab, fintas y cambios de ritmo para obligar al rival a reaccionar y orientar el intercambio hacia posiciones favorables.',
+    drill: 'Ronda de control: ganar centro → provocar salida → cortar ángulo → acción corta → reset; el compañero cambia dirección libremente.',
+    sourceIds: ['WORLD_BOXING_RULES','IBA_COACH_MANUAL','USA_BOXING_EDUCATION'],
+  },
+  {
+    id: 'scoring-quality-before-volume-assumption',
+    title: 'No confundir volumen con golpes puntuables',
+    domains: ['SCORING','OFFENSE','TACTICS'],
+    regions: ['UNIVERSAL'],
+    observableCues: ['muchos golpes tocan guantes', 'ráfaga sin conexión limpia', 'golpes desde mala base', 'volumen sin blanco claro'],
+    consequence: 'Una secuencia de alto volumen no implica automáticamente ventaja si los golpes no llegan limpios al área válida o carecen de control técnico.',
+    correction: 'Priorizar golpes claros y técnicamente sostenibles; usar el volumen para crear aperturas, no como sustituto de precisión y control.',
+    drill: 'Sparring técnico de calidad: máximo 3 golpes por entrada y solo cuenta la acción si al menos uno llega limpio sin perder postura.',
+    sourceIds: ['WORLD_BOXING_RULES','IBA_COACH_MANUAL'],
+  },
+  {
+    id: 'fatigue-must-be-visible-not-assumed',
+    title: 'Diagnosticar deterioro por fatiga solo cuando sea visible',
+    domains: ['FATIGUE','BALANCE','GUARD','TACTICS'],
+    regions: ['UNIVERSAL','RESEARCH'],
+    observableCues: ['guardia empeora progresivamente', 'base se estrecha o cruza más tarde', 'recuperación entre golpes se hace más lenta', 'patrón técnico empeora al avanzar el round'],
+    consequence: 'Atribuir un error a fatiga solo porque ocurre tarde en el round puede confundir un patrón técnico estable con un problema de acondicionamiento.',
+    correction: 'Comparar el mismo patrón temprano y tarde. Solo hablar de posible fatiga cuando haya deterioro repetido y temporalmente progresivo en postura, recuperación o ejecución.',
+    drill: 'Repetir la misma combinación al inicio y final de una ronda controlada; el coach evalúa postura, guardia y salida, no potencia estimada.',
+    sourceIds: ['BOXING_ACUTE_RESPONSES_REVIEW','LOWER_BODY_FATIGUE_PUNCHING','LOWER_LIMB_KINETICS_FATIGUE_2025'],
+  },
+  {
+    id: 'late-round-kinetic-chain-preservation',
+    title: 'Conservar base y cadena cinética bajo cansancio',
+    domains: ['FATIGUE','BALANCE','OFFENSE','STANCE'],
+    regions: ['UNIVERSAL','RESEARCH'],
+    observableCues: ['golpea más con brazos al final', 'piernas dejan de acompañar el cross o gancho', 'pierde postura después de golpes fuertes', 'rotación disminuye y empuja el golpe'],
+    consequence: 'Cuando la contribución de piernas y tronco cae, el atleta puede compensar con el tren superior y perder control, continuidad o eficiencia.',
+    correction: 'Reducir complejidad y potencia si la base deja de sostener la técnica; privilegiar golpes simples, recuperación rápida y colocación antes de volver a cargar.',
+    drill: 'Final de ronda: 20 s de desplazamiento activo → 20 s jab-cross técnico → 20 s salida/guardia; repetir sin perseguir potencia máxima.',
+    sourceIds: ['LOWER_BODY_FATIGUE_PUNCHING','LOWER_LIMB_KINETICS_FATIGUE_2025','INSEP_LJMU_ELITE_PUNCHING'],
+  },
+  {
     id: 'individualize-style',
     title: 'Individualizar el fundamento al atleta y al rival',
     domains: ['TACTICS','STANCE','FOOTWORK'],
@@ -207,11 +292,14 @@ const DOMAIN_KEYWORDS: Record<BoxingKnowledgeDomain, string[]> = {
   EXIT: ['exit','salida','salir','ángulo','angle'],
   FEINTS: ['feint','finta'],
   BALANCE: ['balance','equilibrio','base'],
-  TACTICS: ['strategy','estrategia','táctica','rival'],
+  TACTICS: ['strategy','estrategia','táctica','rival','ritmo','presión'],
   BODY_ATTACK: ['body','cuerpo','hígado','corta distancia'],
+  SCORING: ['score','scoring','puntuar','puntuación','golpe limpio','golpes claros'],
+  RINGCRAFT: ['ringcraft','ring control','control del ring','centro','cortar ring','cortar salida'],
+  FATIGUE: ['fatigue','fatiga','cansancio','cansado','late round','final del round'],
 };
 
-export function retrieveBoxingKnowledge(input: string, limit = 7) {
+export function retrieveBoxingKnowledge(input: string, limit = 8) {
   const normalized = input.toLowerCase();
   const scored = BOXING_KNOWLEDGE.map((entry) => {
     let score = 0;
@@ -223,11 +311,11 @@ export function retrieveBoxingKnowledge(input: string, limit = 7) {
     return { entry, score };
   });
   const matched = scored.filter(x => x.score > 0).sort((a,b) => b.score - a.score).map(x => x.entry);
-  const fallback = BOXING_KNOWLEDGE.filter(x => ['kinetic-chain-before-arm-only-power','guard-recovery-after-offense','movement-is-defense-and-offense','individualize-style'].includes(x.id));
+  const fallback = BOXING_KNOWLEDGE.filter(x => ['kinetic-chain-before-arm-only-power','guard-recovery-after-offense','movement-is-defense-and-offense','effective-pressure-not-forward-only','individualize-style'].includes(x.id));
   return Array.from(new Map([...matched, ...fallback].map(x => [x.id, x])).values()).slice(0, limit);
 }
 
-export function boxingKnowledgePrompt(input: string, limit = 7) {
+export function boxingKnowledgePrompt(input: string, limit = 8) {
   const entries = retrieveBoxingKnowledge(input, limit);
   const lines = entries.map((entry) => {
     const provenance = entry.sourceIds.map(id => `${id}:${BOXING_KNOWLEDGE_SOURCES[id].kind}`).join(', ');
@@ -240,7 +328,8 @@ export function boxingKnowledgePrompt(input: string, limit = 7) {
     text: [
       `Fight AI Hybrid Knowledge Base ${BOXING_KNOWLEDGE_VERSION}:`,
       ...lines,
-      'REGLA DE EVIDENCIA: la base no diagnostica. Cada corrección es una hipótesis que debe confirmarse con observación visible del video. Las fuentes académicas apoyan biomecánica general; no autorizan inventar métricas del atleta. Si el video contradice la base, prevalece el video.',
+      'REGLA DE EVIDENCIA: la base no diagnostica. Cada corrección es una hipótesis que debe confirmarse con observación visible del video. Las fuentes académicas apoyan biomecánica/fisiología general; no autorizan inventar métricas, fatiga o puntuación del atleta. Si el video contradice la base, prevalece el video.',
+      'REGLA DE SCORING: usa criterios de puntuación solo para explicar valor táctico observable. No declares quién ganó un round salvo que el análisis tenga evidencia suficiente y el producto pida explícitamente una evaluación de scoring.',
       'REGLA DE ESTILO: no atribuyas una conducta a nacionalidad, país o “escuela” como estereotipo. Describe únicamente patrones observados en este atleta y este rival.',
     ].join('\n'),
   };
