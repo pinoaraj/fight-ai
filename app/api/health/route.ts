@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { BOXING_KNOWLEDGE_SOURCES, BOXING_KNOWLEDGE_VERSION } from '../../../lib/boxingKnowledge';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,6 +21,12 @@ export async function GET() {
       analysisReady: localMode ? geminiConfigured : backendConfigured || geminiConfigured,
       buildSha: process.env.FIGHT_AI_BUILD_SHA || 'unknown',
       providerAttributionPolicy: 'usedInReport-required',
+      hybridKnowledge: {
+        enabled: true,
+        version: BOXING_KNOWLEDGE_VERSION,
+        verifiedSourceCount: Object.keys(BOXING_KNOWLEDGE_SOURCES).length,
+        policy: 'video-evidence-first',
+      },
     },
     {
       status: 200,
