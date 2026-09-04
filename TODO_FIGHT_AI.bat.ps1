@@ -107,5 +107,14 @@ Banner "BETA LISTA"
 Run-Ps (Join-Path $Root "scripts\show-remote-access.ps1")
 Write-Host ""
 Write-Host "Version: $sha" -ForegroundColor DarkGray
+
+if (Test-Path ".fight-ai-tunnel-url") {
+  $publicUrl = (Get-Content ".fight-ai-tunnel-url" -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+  if ($publicUrl -match '^https://') {
+    Write-Host "Abriendo Fight AI Beta en el navegador..." -ForegroundColor Green
+    Start-Process $publicUrl
+  }
+}
+
 Write-Host "Para cerrar solo el acceso externo usa DETENER_ENLACE_EXTERNO.cmd." -ForegroundColor DarkGray
 Write-Host "Para detener Fight AI local usa DETENER_FIGHT_AI_LOCAL.cmd." -ForegroundColor DarkGray
