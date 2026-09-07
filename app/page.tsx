@@ -126,6 +126,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const reportRef = useRef<HTMLElement>(null);
+  const workflowRef = useRef<HTMLElement>(null);
   const videoUrl = useMemo(() => (video ? URL.createObjectURL(video) : ''), [video]);
   const reportVideoSrc = report?.mode === 'demo' ? '/api/demo-video' : videoUrl;
   const processingStep = Math.min(processingSteps.length - 1, stageFloor);
@@ -135,13 +136,18 @@ export default function Home() {
     : elapsed < 600
       ? 'El trabajo sigue activo en el servidor. La fase mostrada es la fase real del job; no necesitas volver a subir el video.'
       : 'Está tardando más de lo normal. Fight AI conservará el job y podrás reintentarlo sin volver a subir el video.';
-  const identityReady = Boolean(anchor || gloveColor.trim() || topColor.trim() || fighterNotes.trim() || relativeHeight || build);
-  const workflowStep = report || busy ? 5 : !video ? 1 : !anchor ? 2 : !identityReady ? 3 : !focusConfirmed ? 4 : 5;
+  const hasCharacteristics = Boolean(gloveColor.trim() || topColor.trim() || fighterNotes.trim() || relativeHeight || build);
+  const identityReady = Boolean(anchor || hasCharacteristics);
+  const workflowStep = report || busy ? 5 : !video ? 1 : !identityReady ? 2 : !hasCharacteristics ? 3 : !focusConfirmed ? 4 : 5;
   const nextPrompts = ['SUBE TU VIDEO', 'MARCA AL PELEADOR', 'CONFIRMA SUS RASGOS', 'ELIGE EL FOCO DEL COACH', report ? 'REVISA TU REPORTE' : busy ? 'ANALIZANDO…' : 'ANALIZA TU SPARRING'];
   const workflowLabels = ['Subir video', 'Seleccionar peleador', 'Características', 'Foco del coach', report || busy ? 'Reporte' : 'Analizar sparring'];
 
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
   useEffect(() => { void fetch('/api/health', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(setServiceHealth).catch(() => setServiceHealth({})); }, []);
+  useEffect(() => {
+    const active = workflowRef.current?.querySelector<HTMLElement>('.nextPulse');
+    active?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }, [workflowStep]);
   useEffect(() => {
     if (!busy) { setElapsed(0); return; }
     const started = Date.now();
@@ -643,7 +649,7 @@ export default function Home() {
   return <main>
     <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO MOTOR…' : serviceHealth.localMode && serviceHealth.geminiConfigured ? ' PC LOCAL · GEMINI LISTO' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
     <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>{serviceHealth?.localMode ? 'Tu PC procesa el video localmente y solo el clip de análisis se envía a Gemini.' : 'Tu video se usa sólo para este análisis.'}</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
-    <section className="workflowStrip" aria-label="Progreso del análisis" aria-live="polite">{workflowLabels.map((label,index)=>{ const current=workflowStep===index+1; return <span key={label} className={`${current?'active nextPulse':workflowStep>index+1?'done':''}`}><i>{workflowStep>index+1?'✓':index+1}</i><b>{label}</b>{current && <small>{nextPrompts[index]}</small>}</span>; })}</section>
+    <section ref={workflowRef} className="workflowStrip" aria-label="Progreso del análisis" aria-live="polite">{workflowLabels.map((label,index)=>{ const current=workflowStep===index+1; return <span key={label} className={`${current?'active nextPulse':workflowStep>index+1?'done':''}`}><i>{workflowStep>index+1?'✓':index+1}</i><b>{label}</b>{current && <small>{nextPrompts[index]}</small>}</span>; })}</section>
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
       <SectionTitle n="01" title="VIDEO" subtitle="Rounds de hasta 3 minutos" />
       <input data-testid="video-input" ref={inputRef} hidden type="file" accept="video/*" onChange={e => selectVideo(e.target.files?.[0] || null)} />

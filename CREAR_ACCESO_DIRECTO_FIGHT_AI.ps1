@@ -3,8 +3,8 @@ $Root = $PSScriptRoot
 $Desktop = [Environment]::GetFolderPath('Desktop')
 if (-not $Desktop) { throw 'No se pudo localizar el Escritorio de Windows.' }
 
-$Bat = Join-Path $Root 'TODO_FIGHT_AI.bat'
-if (-not (Test-Path $Bat)) { throw 'No se encontro TODO_FIGHT_AI.bat en la carpeta del proyecto.' }
+$Launcher = Join-Path $Root 'ABRIR_FIGHT_AI.cmd'
+if (-not (Test-Path $Launcher)) { throw 'No se encontro ABRIR_FIGHT_AI.cmd en la carpeta del proyecto.' }
 
 function New-FightAiIcon([string]$Path) {
   Add-Type -AssemblyName System.Drawing
@@ -60,9 +60,28 @@ function New-FightAiIcon([string]$Path) {
   }
 }
 
-$IconPath = Join-Path $Root 'FightAI-Beta.ico'
+$IconDirectory = Join-Path $env:LOCALAPPDATA 'FightAI'
+New-Item -ItemType Directory -Path $IconDirectory -Force | Out-Null
+$IconPath = Join-Path $IconDirectory 'FightAI-Beta.ico'
 try {
-  New-FightAiIcon $IconPath
+  $SourceIcon = Join-Path $Root 'assets\desktop\fight-ai-icon.png'
+  if (Test-Path $SourceIcon) {
+    Add-Type -AssemblyName System.Drawing
+    $sourceBitmap = [System.Drawing.Bitmap]::FromFile($SourceIcon)
+    try {
+      $resized = New-Object System.Drawing.Bitmap 256,256
+      $canvas = [System.Drawing.Graphics]::FromImage($resized)
+      try {
+        $canvas.DrawImage($sourceBitmap, 0, 0, 256, 256)
+        $handle = $resized.GetHicon()
+        $icon = [System.Drawing.Icon]::FromHandle($handle)
+        $stream = [System.IO.File]::Open($IconPath, [System.IO.FileMode]::Create)
+        try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose() }
+      } finally { $canvas.Dispose(); $resized.Dispose() }
+    } finally { $sourceBitmap.Dispose() }
+  } else {
+    New-FightAiIcon $IconPath
+  }
 } catch {
   Write-Host 'No se pudo generar el icono personalizado; se usara un icono de Windows.' -ForegroundColor Yellow
   $IconPath = "$env:SystemRoot\System32\shell32.dll"
@@ -71,9 +90,9 @@ try {
 $ShortcutPath = Join-Path $Desktop 'Fight AI Beta.lnk'
 $Shell = New-Object -ComObject WScript.Shell
 $Shortcut = $Shell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = $Bat
+$Shortcut.TargetPath = $Launcher
 $Shortcut.WorkingDirectory = $Root
-$Shortcut.Description = 'Inicia Fight AI Web, actualiza la app y habilita la beta externa segura.'
+$Shortcut.Description = 'Abre Fight AI Web en este PC y reutiliza el servidor si ya está listo.'
 $Shortcut.WindowStyle = 1
 $Shortcut.IconLocation = if ($IconPath -like '*.ico') { "$IconPath,0" } else { "$IconPath,220" }
 $Shortcut.Save()
@@ -82,11 +101,8 @@ Write-Host ''
 Write-Host 'Acceso directo creado correctamente:' -ForegroundColor Green
 Write-Host $ShortcutPath -ForegroundColor Green
 Write-Host ''
-Write-Host 'Desde ahora haz doble clic en "Fight AI Beta" para:' -ForegroundColor Cyan
-Write-Host '- actualizar web/mvp;'
-Write-Host '- construir Fight AI;'
-Write-Host '- iniciar el servidor local;'
-Write-Host '- crear el enlace HTTPS externo;'
-Write-Host '- abrir la beta en tu navegador.'
+Write-Host 'Desde ahora haz doble clic en "Fight AI Beta" para iniciar o reutilizar' -ForegroundColor Cyan
+Write-Host 'el servidor local y abrir la app en tu navegador.'
+Write-Host 'Usa TODO_FIGHT_AI.bat solo cuando quieras actualizar y compartir externamente.'
 Write-Host ''
-Write-Host 'El acceso directo usa el icono Fight AI generado localmente.' -ForegroundColor DarkGray
+Write-Host 'El acceso directo usa el icono Fight AI guardado en LocalAppData.' -ForegroundColor DarkGray

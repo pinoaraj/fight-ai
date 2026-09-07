@@ -167,3 +167,11 @@ Production smoke now waits for three consecutive healthy responses from the expe
 ## Final validation 2026-09-01
 
 Final documented web HEAD passed Web MVP CI #432/#433. The production runtime change immediately before that documentation checkpoint passed AWS Deploy #137 and Web Streaming Production Smoke #75. The public beta remains https://d1ga34t3tjgix2.cloudfront.net and controlled-beta status remains GREEN.
+
+## Local validation 2026-09-07
+
+The active owner-PC runtime is the verified continuation point. The exact 274.6 MB HEVC regression video completed locally for the marked red-gloves fighter in 2 min 24 s, returned truthful Gemini attribution and six timestamp findings, rendered six real JPEG captures and enabled PDF export. Desktop/Pixel Playwright agents passed 14 tests with two device-only skips.
+
+The Windows desktop shortcut now opens an idempotent daily launcher instead of the update/build/tunnel pipeline. The installer and shortcut share `$PSScriptRoot`; the icon persists in `%LOCALAPPDATA%\FightAI`. Cloud retry was corrected so explicit retries reactivate failed Dynamo jobs and provider backoff leases cannot be reclaimed merely because `updatedAt` is old.
+
+The historical CloudFront hostname no longer resolves. Do not claim it as the active beta URL or trigger AWS deployment without a new explicit user decision. Use localhost/LAN for the current beta and `COMPARTIR_FIGHT_AI.cmd` for a temporary authenticated external link.

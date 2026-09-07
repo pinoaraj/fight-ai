@@ -10,7 +10,9 @@
 - Product authority: `docs/GRAPIFY_BETA_SPEC.md`
 - Operational handoff: `docs/CODEX_HANDOFF_2026-08-29.md`
 - Repository rules: `AGENTS.md`
-- Controlled beta URL: https://d1ga34t3tjgix2.cloudfront.net
+- Active PC URL: `http://localhost:<selected-port>` (normally 8787)
+- Active LAN URL: printed by `ABRIR_FIGHT_AI.cmd` / `scripts/start-local.ps1`
+- Historical CloudFront URL: retired/unavailable as of 2026-09-07; do not share it
 
 Do not restart either client or create a second analysis schema.
 
@@ -58,6 +60,14 @@ Before changing preview/upload/jobs/evidence/PDF/provider behavior, preserve:
 - automated CI plus deployed smoke for release-affecting changes.
 
 Controlled beta is approved; broad public launch is not. Continue real-device HEVC and PDF regressions and add observability before widening access.
+
+## Local closure checkpoint — 2026-09-07
+
+- Desktop shortcut `Fight AI Beta.lnk` targets `ABRIR_FIGHT_AI.cmd`, reuses a healthy process and opens localhost.
+- The icon is stored outside the repo in `%LOCALAPPDATA%\FightAI`, while its source asset is versioned under `assets/desktop/`.
+- The previous installer split between `C:\Users\JP\fight-ai` and the Desktop copy was corrected: its default is now `$PSScriptRoot`.
+- The real 274.6 MB HEVC video completed for the red-gloves fighter in 2 min 24 s with six evidence captures and PDF readiness.
+- Cloud retry now supports the explicit transition `failed → queued` without a second upload and respects provider backoff leases.
 
 
 ## Continuity checkpoint — 2026-09-01

@@ -68,4 +68,6 @@ A beta-ready build is not a general-public-production declaration. Continue real
 
 ## Latest checkpoint
 
-2026-09-02 local migration in progress on `feature/hybrid-coach-engine`: local runtime flag, PC-direct analysis path, local FFmpeg preprocessing, hybrid knowledge retrieval, flexible fighter description and Windows start/stop scripts have been added. The previous AWS production baseline remains green but is no longer the intended beta runtime because of cost.
+2026-09-07 local runtime verified on `web/mvp`: the real 274.6 MB HEVC regression video completed in 2 min 24 s for the red-gloves fighter, with truthful Gemini attribution, six timestamp findings, six real JPEG evidence captures and PDF export enabled. Desktop/Pixel virtual agents passed 14 tests (2 device-specific skips). `ABRIR_FIGHT_AI.cmd` is the daily idempotent launcher; `TODO_FIGHT_AI.bat` is reserved for explicit update/external-sharing work.
+
+The former CloudFront hostname no longer resolves and is not the active beta entry point. Use the desktop shortcut or the LAN URL printed by the local launcher; use `COMPARTIR_FIGHT_AI.cmd` only when an external temporary HTTPS link is required.

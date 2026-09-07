@@ -1,8 +1,10 @@
 # Grapify / Fight AI — Living Product & Architecture Spec
 
-_Last updated: 2026-09-02_
+_Last updated: 2026-09-07_
 
 > Runtime checkpoint: the canonical web beta now runs on the owner's Windows PC over the private LAN. Local Next.js + FFmpeg + server-side Gemini is the active path. AWS sections remain historical/optional, and AWS workflows stay manual-only. `docs/LOCAL_PC_SERVER.md` defines the authoritative Windows launcher behavior.
+
+> Verified local checkpoint (2026-09-07): the exact 274.6 MB HEVC regression round completed for the visually marked red-gloves fighter in 2 min 24 s. Gemini produced a real coaching report with six timestamp findings; all six JPEG evidence captures rendered and unlocked PDF export. Desktop/Pixel virtual-agent QA passed 14 tests with two device-specific skips. The retired CloudFront hostname does not currently resolve and is not a valid beta entry point.
 
 ## 1. Product goal
 Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
@@ -96,6 +98,8 @@ The current upgraded web flow contains:
 ### Guided workflow rule
 
 The step strip must behave as a concise visual coach, not passive navigation. It pulses exactly one pending action at a time and advances in this order: **Subir video → Seleccionar peleador → Características → Foco del coach → Analizar sparring**. After submission it becomes the live report/progress state. Completed steps remain visibly checked; future steps do not pulse.
+
+On narrow mobile viewports the strip automatically scrolls the active step into view. Visual marking advances to Characteristics; entering a descriptor can serve as the identity fallback when marking is impractical.
 
 ### Product acceptance criteria
 Web is not release-ready unless:

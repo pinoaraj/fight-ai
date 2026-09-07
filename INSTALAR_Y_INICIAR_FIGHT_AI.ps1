@@ -1,5 +1,5 @@
 param(
-  [string]$InstallDir = "$env:USERPROFILE\fight-ai",
+  [string]$InstallDir = $PSScriptRoot,
   [switch]$SkipBuild
 )
 

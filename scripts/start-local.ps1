@@ -113,6 +113,10 @@ if ($envText -match "REEMPLAZA_CON_TU_API_KEY" -or $envText -notmatch "(?m)^GEMI
 }
 
 $env:FIGHT_AI_RUNTIME = "local"
+if (Test-Path '.fight-ai-build-sha') {
+  $buildSha = Get-Content '.fight-ai-build-sha' -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($buildSha) { $env:FIGHT_AI_BUILD_SHA = $buildSha.Trim() }
+}
 
 if (-not (Test-Path "node_modules")) {
   Write-Host "[1/3] Instalando dependencias..." -ForegroundColor Cyan
@@ -125,7 +129,7 @@ if (-not $SkipBuild) {
   npm run build
   if ($LASTEXITCODE -ne 0) { throw "El build de Fight AI fallo." }
   $sourceRevision = (& git rev-parse HEAD 2>$null | Select-Object -First 1)
-  if ($LASTEXITCODE -eq 0 -and $sourceRevision) {
+  if ($sourceRevision -match '^[a-f0-9]{40}$') {
     Set-Content -Path ".fight-ai-build-sha" -Value $sourceRevision.Trim() -Encoding ascii
   }
 } elseif (-not (Test-Path ".next\BUILD_ID")) {

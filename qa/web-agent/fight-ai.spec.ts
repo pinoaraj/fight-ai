@@ -211,6 +211,27 @@ test('a transient durable-job failure retries without uploading the video again'
 });
 
 test('virtual athlete can identify fighter choose coach focus submit analysis and replay uploaded evidence', async ({ page }) => {
+  await page.route('**/api/health', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ localMode: true, geminiConfigured: true, analysisReady: true }),
+  }));
+  await page.route('**/api/analyze**', async route => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'local-qa-job', status: 'queued' }) });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      status: 'complete',
+      report: {
+        mode: 'real', provider: 'CV / Pose', usedInReport: true, summary: 'Mock backend contract OK',
+        strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
+        evidence: [
+          { time: '00:01', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base' },
+          { time: '00:02', title: 'Salida', observation: 'Salida lineal', correction: 'Pivotar tras golpear' },
+        ],
+      },
+    }) });
+  });
   await page.goto('/');
   await page.getByTestId('video-input').setInputFiles(realVideo());
   const sourcePreview = page.getByTestId('video-preview');
@@ -244,6 +265,27 @@ test('virtual athlete can identify fighter choose coach focus submit analysis an
   const replayState = await replay.evaluate((node: HTMLVideoElement) => ({ readyState: node.readyState, time: node.currentTime }));
   expect(replayState.readyState).toBeGreaterThanOrEqual(2);
   expect(replayState.time).toBeGreaterThan(0);
+});
+
+test('mobile workflow keeps the pulsing next action visible through every step', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes('mobile'), 'mobile-only guided flow assertion');
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(realVideo());
+  await expect(page.getByTestId('preview-status')).toContainText('AHORA MARCA A TU PELEADOR', { timeout: 15_000 });
+  await page.getByTestId('mark-fighter').click();
+  const overlay = page.getByTestId('marker-overlay');
+  const box = await overlay.boundingBox();
+  await overlay.click({ position: { x: Math.round((box?.width || 100) * .45), y: Math.round((box?.height || 100) * .55) } });
+  await expect(page.locator('.workflowStrip .nextPulse')).toContainText('Características');
+  await page.getByTestId('glove-color').fill('rojos');
+  await expect(page.locator('.workflowStrip .nextPulse')).toContainText('Foco del coach');
+  await page.getByTestId('focus-footwork').click();
+  const active = page.locator('.workflowStrip .nextPulse');
+  await expect(active).toContainText('Analizar sparring');
+  await expect.poll(async () => active.evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth;
+  })).toBe(true);
 });
 
 test('mobile agent sees touch-safe single-column flow without horizontal overflow', async ({ page }, testInfo) => {

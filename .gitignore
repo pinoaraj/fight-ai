@@ -8,8 +8,10 @@
 .fight-ai-tunnel-pid
 .fight-ai-tunnel.out.log
 .fight-ai-tunnel.err.log
+.codex-preview.log
 .next/
 node_modules/
 test-results/
 playwright-report/
 *.tsbuildinfo
+FightAI-Beta.ico

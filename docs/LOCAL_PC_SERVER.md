@@ -35,18 +35,27 @@ CREAR_ACCESO_DIRECTO_FIGHT_AI.cmd
 
 El script crea en el Escritorio un acceso directo llamado **Fight AI Beta**. También genera localmente `FightAI-Beta.ico`, un icono propio de Fight AI, y lo asigna al acceso directo.
 
-Desde entonces, un doble clic en **Fight AI Beta** ejecuta `TODO_FIGHT_AI.bat` y realiza el flujo completo:
+Desde entonces, un doble clic en **Fight AI Beta** ejecuta `ABRIR_FIGHT_AI.cmd`. El flujo diario es idempotente:
 
-1. detiene de forma segura el túnel externo anterior;
-2. detiene solo una instancia local verificada de Fight AI;
-3. actualiza `web/mvp` mediante `git pull --ff-only` sin reset destructivo;
-4. instala/valida dependencias y ejecuta `npm run build`;
-5. inicia Fight AI y valida `/api/health`;
-6. crea un túnel HTTPS temporal nuevo;
-7. comprueba el acceso protegido;
-8. abre la beta externa en el navegador.
+1. reutiliza el servidor si el health exacto ya está verde;
+2. si está detenido, inicia el build local existente y valida `/api/health`;
+3. construye solamente cuando todavía no existe un build;
+4. abre `http://localhost:<puerto>` en el navegador.
+
+El acceso directo no detiene una instancia sana, no depende de Git/npm/red en cada apertura y conserva el icono en `%LOCALAPPDATA%\FightAI`. `TODO_FIGHT_AI.bat` queda como operación explícita para actualizar, reconstruir y crear un enlace externo; no es el inicio diario.
 
 El enlace `trycloudflare.com` es temporal y normalmente cambia al reiniciar el túnel.
+
+El instalador y el acceso directo usan la misma copia del repositorio desde la que se ejecutan. Esto evita separar accidentalmente `.env.local` del lanzador.
+
+## Validación real 2026-09-07
+
+- health local y LAN: `service=fight-ai-web`, `localMode=true`, `analysisReady=true`;
+- Playwright desktop + Pixel: 14 PASS, 2 skips específicos de dispositivo;
+- video HEVC real `20260827_204921.mp4` (274.6 MB): frame compatible y marcado del peleador de guantes rojos en 00:05;
+- reporte Gemini real: completado en 2 min 24 s;
+- evidencia: 6/6 capturas JPEG reales visibles;
+- PDF: acción habilitada únicamente después de completar las 6 capturas.
 
 ## Seleccion de puerto local
 
