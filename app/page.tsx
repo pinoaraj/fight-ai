@@ -1,16 +1,25 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { parseTargetIdentity } from '../lib/targetIdentity';
 
-type Evidence = { time: string; title: string; observation: string; correction: string };
+type Evidence = { time: string; title: string; observation: string; correction: string; targetMatch?: boolean };
 type PipelineTimings = {
   upload_ms?: number; preprocessing_ms?: number; gemini_upload_ms?: number; gemini_processing_ms?: number; analysis_ms?: number; total_ms?: number;
   original_size_bytes?: number; processed_size_bytes?: number; clip_count?: number;
+};
+type TargetIdentity = {
+  requestedGloves?: string;
+  observedGloves?: string;
+  anchorMatch: 'confirmed' | 'uncertain' | 'conflict';
+  confidence?: number;
+  notes?: string;
 };
 type Report = {
   mode: 'real' | 'demo'; provider: string; usedInReport: boolean; summary: string;
   strengths: string[]; priorities: string[]; opponent: string[]; plan: string[]; drills: string[]; evidence: Evidence[];
   timings?: PipelineTimings;
+  targetIdentity?: TargetIdentity;
 };
 type Anchor = { x: number; y: number; size: number } | null;
 type AnalysisContext = Record<string, string>;
@@ -32,6 +41,7 @@ const focusOptions = [
 
 const demo: Report = {
   mode: 'demo', provider: 'Sin proveedor', usedInReport: false,
+  targetIdentity: { requestedGloves: 'demo', observedGloves: 'demo', anchorMatch: 'uncertain', notes: 'Vista de demostración sin selección real.' },
   summary: 'Tu presión funciona mejor cuando ocupas espacio con el jab antes de entrar. El patrón que más limita tu rendimiento es que el torso llega antes que la base: eso te deja disponible al contraataque y hace más lenta la salida. Prioridad: entrar con pasos cortos, terminar equilibrado y salir por ángulo.',
   strengths: ['Presión sostenida que obliga al rival a ceder terreno', 'Buena intención de cambio de nivel cuando anticipas la respuesta'],
   priorities: ['Entrada: el torso se adelanta a los pies en varias secuencias; corrige cerrando distancia con la base antes de soltar potencia.', 'Salida: después de atacar permaneces demasiado tiempo en la línea central; termina la combinación con pivote o paso lateral.', 'Guardia en recuperación: la mano derecha tarda en volver después de acciones ofensivas largas.'],
@@ -345,7 +355,25 @@ export default function Home() {
       throw new Error(serverMessage || `El análisis terminó con HTTP ${response.status}.`);
     }
     if (!data || !('summary' in data)) throw new Error('El servidor respondió sin un reporte válido.');
-    return data;
+    return validateReportIdentity(data);
+  }
+
+  function validateReportIdentity(candidate: Report) {
+    const requested = gloveColor.trim() || candidate.targetIdentity?.requestedGloves || 'el peleador marcado';
+    const observed = candidate.targetIdentity?.observedGloves ? ` Gemini observó guantes ${candidate.targetIdentity.observedGloves}.` : '';
+    const identity = parseTargetIdentity(candidate.targetIdentity, {
+      gloveColor,
+      topColor,
+      fighterNotes,
+      anchorX: anchor ? anchor.x.toFixed(2) : '',
+      anchorY: anchor ? anchor.y.toFixed(2) : '',
+      anchorSize: anchor ? anchor.size.toFixed(2) : '',
+      anchorTime: anchor ? previewTime.toFixed(2) : '',
+    });
+    if (!identity || candidate.evidence.some(item => item.targetMatch !== true)) {
+      throw new Error(`El reporte no coincide con el peleador seleccionado (${requested}).${observed} Vuelve a marcar al atleta en un frame claro antes de reintentar.`);
+    }
+    return { ...candidate, targetIdentity: identity };
   }
 
 
@@ -394,7 +422,7 @@ export default function Home() {
       const raw = await response.text();
       let data: { status?: string; report?: Report; error?: string; updatedAt?: number } | null = null;
       try { data = raw ? JSON.parse(raw) as { status?: string; report?: Report; error?: string; updatedAt?: number } : null; } catch { data = null; }
-      if (data?.status === 'complete' && data.report) return data.report;
+      if (data?.status === 'complete' && data.report) return validateReportIdentity(data.report);
       if (data?.status === 'failed') throw new Error(data.error || 'No se pudo completar el análisis.');
       if (!response.ok && response.status !== 202) throw new Error(data?.error || `No se pudo consultar el análisis (HTTP ${response.status}).`);
 
@@ -431,7 +459,7 @@ export default function Home() {
       const raw = await statusResponse.text();
       let data: { status?: string; report?: Report; error?: string; updatedAt?: number } | null = null;
       try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
-      if (data?.status === 'complete' && data.report) return data.report;
+      if (data?.status === 'complete' && data.report) return validateReportIdentity(data.report);
       if (data?.status === 'failed' || !statusResponse.ok && statusResponse.status !== 202) throw new Error(data?.error || 'No se pudo completar el análisis.');
       if (data?.status === 'downloading') setStageFloor(0);
       else if (data?.status === 'converting') setStageFloor(1);
@@ -647,7 +675,7 @@ export default function Home() {
   }
 
   return <main>
-    <header className="topbar"><a className="brand" href="#top"><span className="mark">FA</span><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO MOTOR…' : serviceHealth.localMode && serviceHealth.geminiConfigured ? ' PC LOCAL · GEMINI LISTO' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
+    <header className="topbar"><a className="brand" href="#top"><img className="brandIcon" src="/icon.png" alt="Fight AI"/><div><b>FIGHT AI</b><small>SPARRING ANALYST</small></div></a><nav className="topnav"><a href="#analyze">Analizar</a><a href="#report">Reporte</a><a href="#visual-coach">Visual Coach</a></nav><div className={`status ${serviceHealth?.geminiConfigured && serviceHealth?.analysisReady ? 'ready' : serviceHealth ? 'offline' : ''}`}><span className="dot"/>{serviceHealth === null ? ' VERIFICANDO MOTOR…' : serviceHealth.localMode && serviceHealth.geminiConfigured ? ' PC LOCAL · GEMINI LISTO' : serviceHealth.geminiConfigured && serviceHealth.analysisReady ? ' GEMINI LISTO PARA ANALIZAR' : ' GEMINI NO DISPONIBLE'}</div></header>
     <section className="hero" id="top"><div><span className="eyebrow">BOXING · KICKBOXING · COACHING CON EVIDENCIA</span><h1>Tu sparring,<br/><em>convertido en un plan.</em></h1><p>Marca al peleador, define el foco y recibe un plan de combate basado en momentos verificables del video.</p><div className="startDirection"><span>01</span><div><b>COMIENZA SUBIENDO TU VIDEO</b><small>La zona destacada de abajo es el único primer paso.</small></div><i>↓</i></div></div><div className="heroCard"><span className="heroMetric">01</span><b>COACHING QUE PUEDES REVISAR</b><p>Patrón visible → consecuencia → corrección → drill → evidencia reproducible.</p><div className="miniProvider"><span>PRIVADO</span><strong>{serviceHealth?.localMode ? 'Tu PC procesa el video localmente y solo el clip de análisis se envía a Gemini.' : 'Tu video se usa sólo para este análisis.'}</strong></div><div className="miniProvider"><span>HONESTO</span><strong>Sin conteos ni métricas inventadas.</strong></div></div></section>
     <section ref={workflowRef} className="workflowStrip" aria-label="Progreso del análisis" aria-live="polite">{workflowLabels.map((label,index)=>{ const current=workflowStep===index+1; return <span key={label} className={`${current?'active nextPulse':workflowStep>index+1?'done':''}`}><i>{workflowStep>index+1?'✓':index+1}</i><b>{label}</b>{current && <small>{nextPrompts[index]}</small>}</span>; })}</section>
     <section className="workspace" id="analyze"><aside className="panel uploadPanel">
@@ -679,6 +707,12 @@ function SectionTitle({n,title,subtitle,extraClass=''}:{n:string;title:string;su
 function ReportView({report,onJumpMain,frames,mediaSrc,sourceNeedsFrames}:{report:Report;onJumpMain:(time:string)=>void;frames:Record<string,string>;mediaSrc:string;sourceNeedsFrames:boolean}) {
   const footworkIssue = report.priorities.some(x=>/foot|pie|pies|base|piv|ángulo|distancia|entrada|salida/i.test(x));
   const evidenceFramesReady = report.evidence.every((e) => Boolean(frames[e.time]));
+  const identity = report.targetIdentity;
+  const identityGloves = identity?.observedGloves || identity?.requestedGloves || '';
+  const identityState = identity?.anchorMatch === 'confirmed' ? 'IDENTIDAD CONFIRMADA' : 'IDENTIDAD POR VERIFICAR';
+  const identityConfidence = typeof identity?.confidence === 'number'
+    ? ` · ${Math.round(Math.max(0, Math.min(1, identity.confidence)) * 100)}% CONFIANZA`
+    : '';
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(report.evidence[0] || null);
   const evidenceVideoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => { setSelectedEvidence(report.evidence[0] || null); }, [report]);
@@ -699,6 +733,7 @@ function ReportView({report,onJumpMain,frames,mediaSrc,sourceNeedsFrames}:{repor
   }
   return <div data-testid="report-content">
     <div className="reportHead"><div><span className="eyebrow">REPORTE DE COACHING</span><h2>Análisis técnico</h2><small>{report.mode==='demo'?'Vista demo interactiva · incluye video, evidencia y diagramas':'Análisis completado'}</small>{report.timings && <small data-testid="pipeline-timings">Carga {formatMs(report.timings.upload_ms)} · Preparación Gemini {formatMs(report.timings.gemini_processing_ms)} · Coaching {formatMs(report.timings.analysis_ms)} · Total servidor {formatMs(report.timings.total_ms)}</small>}</div><div className="reportActions"><div data-testid="provider-badge" className={report.usedInReport?'aiBadge on':'aiBadge'}><span className="dot"/>{report.usedInReport?`${report.provider.toUpperCase()} · SÍ PARTICIPÓ EN ESTE REPORTE`:`${report.provider.toUpperCase()} · NO PARTICIPÓ`}</div>{!evidenceFramesReady && <small className="pdfFrameStatus" role="status">PREPARANDO IMÁGENES PARA PDF · {Object.keys(frames).length}/{report.evidence.length}</small>}<button data-testid="print-report" disabled={!evidenceFramesReady} title={evidenceFramesReady ? 'Descargar reporte con imágenes reales' : 'Esperando las capturas reales del video'} onClick={()=>window.print()}>{evidenceFramesReady?'↓ DESCARGAR PDF':'⌛ PREPARANDO PDF'}</button></div></div>
+    <div data-testid="target-identity-badge" className={`aiBadge targetIdentityBadge ${identity?.anchorMatch === 'confirmed' ? 'on confirmed' : 'uncertain'}`}><span>PELEADOR ANALIZADO · </span><strong>{identityGloves ? `GUANTES ${identityGloves.toUpperCase()} · ` : ''}{identityState}{identityConfidence}</strong>{identity?.notes && <small> · {identity.notes}</small>}</div>
     {report.mode === 'demo' && <section className="demoVideoSection" data-testid="demo-video-section"><div><span className="eyebrow">VIDEO DE DEMOSTRACIÓN</span><h3>Prueba cómo funciona la evidencia antes de subir tu sparring</h3><p>Este clip corto demuestra selección, timestamps y reproducción. El reporte de ejemplo no afirma que sea un análisis real de este clip.</p></div><video data-testid="demo-video" src="/api/demo-video" controls muted playsInline preload="auto"/></section>}
     <div className="takeaway"><span>DIAGNÓSTICO PRINCIPAL</span><p>{report.summary}</p></div>
     <div className="reportNav"><a href="#priorities">Prioridades</a><a href="#opponent">Rival</a><a href="#visual-coach">Visual Coach</a><a href="#evidence">Evidencia</a></div>

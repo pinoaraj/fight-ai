@@ -31,7 +31,9 @@ test('virtual athlete can navigate rich demo coaching report with playable evide
   const evidenceVideo = page.getByTestId('evidence-video');
   await expect(evidenceVideo).toBeVisible();
   await page.getByTestId('replay-selected').click();
-  await expect.poll(async () => evidenceVideo.evaluate((node: HTMLVideoElement) => node.currentTime), { timeout: 10_000 }).toBeGreaterThan(.5);
+  await expect.poll(async () => evidenceVideo.evaluate((node: HTMLVideoElement) => (
+    node.readyState >= 2 && node.videoWidth > 0 && node.videoHeight > 0 && node.currentTime > .5
+  )), { timeout: 10_000 }).toBe(true);
   await expect(page.getByTestId('print-report')).toContainText('PDF');
 });
 
@@ -89,10 +91,11 @@ test('browser uses multipart S3 then a durable uploaded-file analysis job', asyn
         status: 'complete',
         report: {
           mode: 'real', provider: 'Gemini', usedInReport: true,
+          targetIdentity: { requestedGloves: 'rojos', observedGloves: 'rojos', anchorMatch: 'confirmed', confidence: .96, notes: 'Coincide con el ancla visual.' },
           summary: 'QA streamed browser path verified.',
           strengths: ['Presión útil con jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'],
           drills: ['Step-jab + pivote · 3×2 min'],
-          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base antes del golpe' }],
+          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base antes del golpe', targetMatch: true }],
         },
       }),
     });
@@ -108,7 +111,50 @@ test('browser uses multipart S3 then a durable uploaded-file analysis job', asyn
   expect(uploadedAnalysisSeen).toBe(true);
   expect(multipartAnalyzeSeen).toBe(false);
   await expect(page.getByTestId('provider-badge')).toContainText('GEMINI');
+  await expect(page.getByTestId('target-identity-badge')).toContainText('PELEADOR ANALIZADO · GUANTES ROJOS · IDENTIDAD CONFIRMADA · 96% CONFIANZA');
+  await page.emulateMedia({ media: 'print' });
+  await expect(page.getByTestId('target-identity-badge')).toBeVisible();
+  await page.emulateMedia({ media: 'screen' });
   await expect(page.getByTestId('pipeline-timings')).toContainText('Carga');
+});
+
+test('client rejects a report that switched from red gloves to the black-gloves opponent', async ({ page }) => {
+  const video = realVideo();
+  await page.route('**/api/health', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, backendConfigured: false, geminiConfigured: true, analysisReady: true }),
+  }));
+  await page.route('**/api/direct-upload**', async route => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (body.action === 'start') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/identity.mp4', uploadId: 'identity-upload' }) });
+    if (body.action === 'sign') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ url: 'https://upload.invalid/identity' }) });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ key: 'uploads/identity.mp4' }) });
+  });
+  await page.route('https://upload.invalid/**', route => route.fulfill({
+    status: 200,
+    headers: { etag: '"identity-part"', 'access-control-allow-origin': '*', 'access-control-expose-headers': 'ETag' },
+  }));
+  await page.route('**/api/analyze-uploaded**', route => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'identity-job', status: 'queued' }) });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      status: 'complete',
+      report: {
+        mode: 'real', provider: 'Gemini', usedInReport: true,
+        targetIdentity: { requestedGloves: 'rojos', observedGloves: 'negros', anchorMatch: 'conflict', confidence: .93, notes: 'La salida corresponde al rival.' },
+        summary: 'Informe incorrecto sobre el rival.', strengths: ['Guardia alta'], priorities: ['Presión'], opponent: [], plan: [], drills: [], evidence: [],
+      },
+    }) });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(video);
+  await page.getByTestId('glove-color').fill('rojos');
+  await page.getByTestId('analyze-button').click();
+  await expect(page.locator('.error[role="alert"]')).toContainText('El reporte no coincide con el peleador seleccionado (rojos). Gemini observó guantes negros.', { timeout: 20_000 });
+  await expect(page.getByTestId('report-content')).toHaveCount(0);
 });
 
 test('mobile upload falls back to same-origin proxy when signed S3 PUT fails', async ({ page }) => {
@@ -146,8 +192,9 @@ test('mobile upload falls back to same-origin proxy when signed S3 PUT fails', a
       status: 200, contentType: 'application/json',
       body: JSON.stringify({ status: 'complete', report: {
         mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Fallback móvil verificado.',
+        targetIdentity: { requestedGloves: 'rojos', observedGloves: 'rojos', anchorMatch: 'confirmed', confidence: .96, notes: 'Coincide con los guantes declarados.' },
         strengths: ['Jab'], priorities: ['Ángulo'], opponent: ['Retrocede'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
-        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Visible', correction: 'Salir por ángulo' }],
+        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Visible', correction: 'Salir por ángulo', targetMatch: true }],
       } }),
     });
   });
@@ -189,8 +236,9 @@ test('a transient durable-job failure retries without uploading the video again'
         status: 'complete',
         report: {
           mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Reintento sin segunda carga verificado.',
+          targetIdentity: { requestedGloves: 'rojos', observedGloves: 'rojos', anchorMatch: 'confirmed', confidence: .95, notes: 'Coincide con los guantes declarados.' },
           strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
-          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base' }],
+          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base', targetMatch: true }],
         },
       }),
     });
@@ -216,6 +264,18 @@ test('virtual athlete can identify fighter choose coach focus submit analysis an
     contentType: 'application/json',
     body: JSON.stringify({ localMode: true, geminiConfigured: true, analysisReady: true }),
   }));
+  // This journey verifies the browser's local async-job contract. Keep frame
+  // staging deterministic here instead of depending on FFmpeg being installed
+  // on the GitHub runner; frame decoding has its own browser journey above.
+  await page.route('**/api/preview-frame**', route => {
+    if (route.request().method() === 'DELETE') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ deleted: true }) });
+    return route.fulfill({
+      status: 200,
+      contentType: 'image/jpeg',
+      headers: { 'x-fight-ai-staged-video': 'qa-staged-video' },
+      body: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EH//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EH//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EH//2Q==', 'base64'),
+    });
+  });
   await page.route('**/api/analyze**', async route => {
     if (route.request().method() === 'POST') {
       return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'local-qa-job', status: 'queued' }) });
@@ -224,10 +284,11 @@ test('virtual athlete can identify fighter choose coach focus submit analysis an
       status: 'complete',
       report: {
         mode: 'real', provider: 'CV / Pose', usedInReport: true, summary: 'Mock backend contract OK',
+        targetIdentity: { requestedGloves: 'azules', observedGloves: 'azules', anchorMatch: 'confirmed', confidence: .91, notes: 'Coincide con los guantes declarados.' },
         strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
         evidence: [
-          { time: '00:01', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base' },
-          { time: '00:02', title: 'Salida', observation: 'Salida lineal', correction: 'Pivotar tras golpear' },
+          { time: '00:01', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base', targetMatch: true },
+          { time: '00:02', title: 'Salida', observation: 'Salida lineal', correction: 'Pivotar tras golpear', targetMatch: true },
         ],
       },
     }) });
@@ -256,15 +317,9 @@ test('virtual athlete can identify fighter choose coach focus submit analysis an
   const replay = page.getByTestId('evidence-video');
   await expect(replay).toBeVisible();
   await page.getByTestId('replay-selected').click();
-  await expect.poll(async () => replay.evaluate((node: HTMLVideoElement) => ({
-    readyState: node.readyState,
-    width: node.videoWidth,
-    height: node.videoHeight,
-    time: node.currentTime,
-  })), { timeout: 10_000 }).toMatchObject({ width: 320, height: 240 });
-  const replayState = await replay.evaluate((node: HTMLVideoElement) => ({ readyState: node.readyState, time: node.currentTime }));
-  expect(replayState.readyState).toBeGreaterThanOrEqual(2);
-  expect(replayState.time).toBeGreaterThan(0);
+  await expect.poll(async () => replay.evaluate((node: HTMLVideoElement) => (
+    node.readyState >= 2 && node.videoWidth === 320 && node.videoHeight === 240 && node.currentTime > 0
+  )), { timeout: 10_000 }).toBe(true);
 });
 
 test('mobile workflow keeps the pulsing next action visible through every step', async ({ page }, testInfo) => {

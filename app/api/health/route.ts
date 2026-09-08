@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { BOXING_KNOWLEDGE_SOURCES, BOXING_KNOWLEDGE_VERSION } from '../../../lib/boxingKnowledge';
+import { BOXING_PROGRAM_CATALOG, BOXING_PROGRAM_CATALOG_VERSION } from '../../../lib/boxingProgramCatalog';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,6 +26,8 @@ export async function GET() {
         enabled: true,
         version: BOXING_KNOWLEDGE_VERSION,
         verifiedSourceCount: Object.keys(BOXING_KNOWLEDGE_SOURCES).length,
+        programCatalogVersion: BOXING_PROGRAM_CATALOG_VERSION,
+        verifiedProgramCount: BOXING_PROGRAM_CATALOG.length,
         policy: 'video-evidence-first',
       },
     },

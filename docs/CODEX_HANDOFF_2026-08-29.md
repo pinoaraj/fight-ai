@@ -175,3 +175,12 @@ The active owner-PC runtime is the verified continuation point. The exact 274.6 
 The Windows desktop shortcut now opens an idempotent daily launcher instead of the update/build/tunnel pipeline. The installer and shortcut share `$PSScriptRoot`; the icon persists in `%LOCALAPPDATA%\FightAI`. Cloud retry was corrected so explicit retries reactivate failed Dynamo jobs and provider backoff leases cannot be reclaimed merely because `updatedAt` is old.
 
 The historical CloudFront hostname no longer resolves. Do not claim it as the active beta URL or trigger AWS deployment without a new explicit user decision. Use localhost/LAN for the current beta and `COMPARTIR_FIGHT_AI.cmd` for a temporary authenticated external link.
+# Update — 2026-09-08 local beta closure
+
+- Active branch/runtime: `web/mvp`, Windows local server on port 8787.
+- Regression video: `C:\Users\JP\Downloads\20260827_204921.mp4` (274.6 MB HEVC).
+- Result: real Gemini report in 137 s; selected red/white-gloves athlete confirmed at 98%, black-gloves opponent explicitly excluded, five evidence frames ready for PDF.
+- New release invariants: `targetIdentity` is required, marked anchors must be confirmed, glove families must agree, confidence must be at least 0.60 and all accepted evidence must have `targetMatch=true`.
+- Branding: new `FIGHT AI` icon is used by the website and `Fight AI Beta.lnk`.
+- Knowledge catalog: `docs/BOXING_PROGRAM_CATALOG.md`, version `2026.09.07-v1`.
+- Verification: typecheck/build PASS; Playwright 16 passed, 2 skipped.

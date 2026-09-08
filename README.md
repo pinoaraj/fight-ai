@@ -2,11 +2,12 @@
 
 Web client for the Fight AI combat-sparring analysis platform.
 
-## Status — local-PC beta migration (2026-09-02)
+## Status — local-PC beta operativa (2026-09-08)
 
-Canonical cloud baseline: `web/mvp`  
-Active local-server work: `feature/hybrid-coach-engine`  
+Canonical and active local-server branch: `web/mvp`
 PR #2 remains the historical controlled-cloud beta baseline.
+
+Latest operational verification (2026-09-08): the exact 274.6 MB HEVC regression video completed locally in 137 seconds. The fighter marked on the right was confirmed as the red/white-gloves athlete at 98% identity confidence; the report explicitly distinguished the black-gloves opponent, rendered five real JPEG evidence moments, and enabled print/PDF export. The branded `FIGHT AI` website logo and desktop shortcut are installed. TypeScript, production build, and the desktop/mobile Playwright virtual-agent gate pass (16 passed, 2 device-specific skips).
 
 The web beta is cleared for controlled beta testing. Latest validated baseline:
 - Web MVP CI #432/#433: PASS on the final documented HEAD;

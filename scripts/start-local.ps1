@@ -130,7 +130,9 @@ if (-not $SkipBuild) {
   if ($LASTEXITCODE -ne 0) { throw "El build de Fight AI fallo." }
   $sourceRevision = (& git rev-parse HEAD 2>$null | Select-Object -First 1)
   if ($sourceRevision -match '^[a-f0-9]{40}$') {
-    Set-Content -Path ".fight-ai-build-sha" -Value $sourceRevision.Trim() -Encoding ascii
+    $resolvedRevision = $sourceRevision.Trim()
+    Set-Content -Path ".fight-ai-build-sha" -Value $resolvedRevision -Encoding ascii
+    $env:FIGHT_AI_BUILD_SHA = $resolvedRevision
   }
 } elseif (-not (Test-Path ".next\BUILD_ID")) {
   throw "No existe un build previo. Ejecuta sin -SkipBuild."

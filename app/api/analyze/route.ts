@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { boxingKnowledgePrompt } from '../../../lib/boxingKnowledge';
+import { identityInstruction, parseIdentityEvidence, parseTargetIdentity, targetIdentitySchema, TargetIdentityContext } from '../../../lib/targetIdentity';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,7 +26,7 @@ function textOf(item: unknown) {
   return [typeof x.title === 'string' ? x.title : '', typeof x.description === 'string' ? x.description : ''].filter(Boolean).join(': ');
 }
 
-function normalizeReport(raw: unknown) {
+function normalizeReport(raw: unknown, source: FormData) {
   const a = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const strengthsRaw = Array.isArray(a.strengths) ? a.strengths : [];
   const weaknessesRaw = Array.isArray(a.weaknesses) ? a.weaknesses : [];
@@ -40,6 +41,7 @@ function normalizeReport(raw: unknown) {
   const videoAI = (realVision.videoAI && typeof realVision.videoAI === 'object' ? realVision.videoAI : {}) as Record<string, unknown>;
   const providerUsed = videoAI.usedInReport === true;
   const provider = providerUsed && typeof videoAI.provider === 'string' ? videoAI.provider : 'CV / Pose';
+  const targetIdentity = parseTargetIdentity(a.targetIdentity, targetContext(source));
   const evidence = [...weaknessesRaw, ...strengthsRaw].flatMap(item => {
     if (!item || typeof item !== 'object') return [];
     const x = item as Record<string, unknown>;
@@ -49,10 +51,11 @@ function normalizeReport(raw: unknown) {
       title: typeof x.title === 'string' ? x.title : 'Evidencia',
       observation: typeof x.description === 'string' ? x.description : '',
       correction: typeof x.recommendation === 'string' ? x.recommendation : typeof x.whyItMatters === 'string' ? x.whyItMatters : '',
+      targetMatch: x.targetMatch === true,
     }));
   });
   return {
-    mode: 'real' as const, provider, usedInReport: providerUsed,
+    mode: 'real' as const, provider, usedInReport: providerUsed, targetIdentity,
     summary: typeof a.mainTakeaway === 'string' ? a.mainTakeaway : typeof strategy.summary === 'string' ? strategy.summary : 'Análisis completado.',
     strengths: strengthsRaw.map(textOf).filter(Boolean), priorities: weaknessesRaw.map(textOf).filter(Boolean),
     opponent: [...observedOpponent.map(textOf).filter(Boolean), ...hypotheses], plan: rematchPlan.length ? rematchPlan : goals,
@@ -81,12 +84,13 @@ function cleanGeminiJson(text: string) {
 
 const coachingSchema = {
   type: 'object', properties: {
+    targetIdentity: targetIdentitySchema,
     summary: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
     opponent: { type: 'array', items: { type: 'string' } }, plan: { type: 'array', items: { type: 'string' } }, drills: { type: 'array', items: { type: 'string' } },
     evidence: { type: 'array', items: { type: 'object', properties: {
-      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' },
-    }, required: ['time','title','observation','correction'] } },
-  }, required: ['summary','strengths','priorities','opponent','plan','drills','evidence'],
+      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' }, targetMatch: { type: 'boolean' },
+    }, required: ['time','title','observation','correction','targetMatch'] } },
+  }, required: ['targetIdentity','summary','strengths','priorities','opponent','plan','drills','evidence'],
 };
 
 function interactionOutputText(raw: unknown) {
@@ -141,6 +145,18 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
 }
 
 function field(source: FormData, key: string, fallback = '') { return String(source.get(key) || fallback).trim(); }
+
+function targetContext(source: FormData): TargetIdentityContext {
+  return {
+    gloveColor: field(source, 'glove_color'),
+    topColor: field(source, 'top_color'),
+    fighterNotes: field(source, 'fighter_notes'),
+    anchorX: field(source, 'anchor_x'),
+    anchorY: field(source, 'anchor_y'),
+    anchorSize: field(source, 'anchor_size', '24'),
+    anchorTime: field(source, 'anchor_time', '0'),
+  };
+}
 
 function makeThreeMinuteClip(inputPath: string, outputPath: string) {
   return new Promise<void>((resolve, reject) => {
@@ -324,6 +340,7 @@ VIDEO Y OBJETIVO:
 - Guardia declarada del atleta: ${stance}.
 - Peleador objetivo: ${descriptors || 'peleador seleccionado por el usuario'}.
 - ${anchor}
+- ${identityInstruction(targetContext(source))}
 - Si la identidad se vuelve dudosa, NO cambies de peleador silenciosamente: usa solo momentos en que estés seguro.
 
 FOCO PEDIDO POR EL ATLETA:
@@ -339,30 +356,25 @@ ESTÁNDAR DE COACHING:
 6. Prioriza SOLO las 3 correcciones con mayor impacto.
 7. Las fortalezas deben explicar cómo explotarlas estratégicamente.
 8. Cada drill debe estar ligado a una prioridad concreta e incluir estructura práctica y objetivo.
-9. evidence debe usar timestamps MM:SS realmente visibles, distribuidos en el round.
+9. evidence debe usar timestamps MM:SS realmente visibles, distribuidos en el round; targetMatch solo es true cuando ese momento corresponde al atleta objetivo.
 10. summary debe ser un diagnóstico específico, no una plantilla ni una descripción de una escuela nacional.
 
-Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.`;
+Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, priorities, opponent, plan, drills y evidence.`;
 
     await updateStatus?.('coaching');
     const analysisStarted = Date.now();
     const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
     const analysisMs = Date.now() - analysisStarted;
+    const targetIdentity = parseTargetIdentity(parsed.targetIdentity, targetContext(source));
+    if (!targetIdentity) throw new Error('No pudimos confirmar que el análisis siguiera al peleador seleccionado. Ajusta el círculo o agrega rasgos visibles y reintenta.');
     const stringList = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
-    const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.filter(x => x && typeof x === 'object').map(x => {
-      const item = x as Record<string, unknown>;
-      return {
-        time: typeof item.time === 'string' ? item.time : '00:00',
-        title: typeof item.title === 'string' ? item.title : 'Evidencia',
-        observation: typeof item.observation === 'string' ? item.observation : '',
-        correction: typeof item.correction === 'string' ? item.correction : '',
-      };
-    }).filter(x => /^\d{1,2}:\d{2}$/.test(x.time) && x.observation) : [];
+    const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.map(parseIdentityEvidence).filter((item): item is NonNullable<typeof item> => Boolean(item)) : [];
 
     return {
       mode: 'real' as const,
       provider: 'Gemini',
       usedInReport: true,
+      targetIdentity,
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Análisis completado con Gemini.',
       strengths: stringList(parsed.strengths),
       priorities: stringList(parsed.priorities).slice(0,3),
@@ -503,14 +515,14 @@ export async function POST(req: NextRequest) {
       while (Date.now() < deadline) {
         await sleep(2200);
         const job = await requestJson(`${backend}/jobs/${encodeURIComponent(created.jobId)}`) as { status?: string; error?: string; result?: { report?: unknown } };
-        if (job.status === 'COMPLETED') { if (!job.result?.report) throw new Error('El análisis terminó sin reporte.'); return NextResponse.json(normalizeReport(job.result.report)); }
+        if (job.status === 'COMPLETED') { if (!job.result?.report) throw new Error('El análisis terminó sin reporte.'); return NextResponse.json(normalizeReport(job.result.report, source)); }
         if (job.status === 'FAILED') throw new Error(job.error || 'El motor detuvo el análisis.');
       }
       throw new Error('El análisis superó el tiempo máximo de espera (25 min).');
     }
     const legacy = await requestJson(`${backend}/analyze`, { method: 'POST', body: source }) as { report?: unknown };
     if (!legacy.report) throw new Error('El motor no devolvió reporte.');
-    return NextResponse.json(normalizeReport(legacy.report));
+    return NextResponse.json(normalizeReport(legacy.report, source));
   } catch (error) {
     console.error('Fight AI web analysis error', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'No se pudo completar el análisis.' }, { status: 502 });

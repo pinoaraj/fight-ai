@@ -1,3 +1,5 @@
+import { boxingProgramCatalogPrompt } from './boxingProgramCatalog';
+
 export type BoxingKnowledgeRegion = 'UNIVERSAL' | 'USA' | 'UK' | 'RESEARCH';
 export type BoxingKnowledgeDomain =
   | 'STANCE' | 'GUARD' | 'FOOTWORK' | 'DISTANCE' | 'OFFENSE' | 'DEFENSE'
@@ -317,6 +319,7 @@ export function retrieveBoxingKnowledge(input: string, limit = 8) {
 
 export function boxingKnowledgePrompt(input: string, limit = 8) {
   const entries = retrieveBoxingKnowledge(input, limit);
+  const programs = boxingProgramCatalogPrompt(input, entries.map(entry => entry.id), 3);
   const lines = entries.map((entry) => {
     const provenance = entry.sourceIds.map(id => `${id}:${BOXING_KNOWLEDGE_SOURCES[id].kind}`).join(', ');
     return `- [${entry.id}] ${entry.title}. Señales observables: ${entry.observableCues.join('; ')}. Consecuencia: ${entry.consequence} Corrección candidata: ${entry.correction} Drill: ${entry.drill} Fuentes: ${provenance}.`;
@@ -324,10 +327,13 @@ export function boxingKnowledgePrompt(input: string, limit = 8) {
   return {
     version: BOXING_KNOWLEDGE_VERSION,
     ids: entries.map(x => x.id),
+    programCatalogVersion: programs.version,
+    programIds: programs.ids,
     sourceIds: Array.from(new Set(entries.flatMap(x => x.sourceIds))),
     text: [
       `Fight AI Hybrid Knowledge Base ${BOXING_KNOWLEDGE_VERSION}:`,
       ...lines,
+      ...(programs.text ? [programs.text] : []),
       'REGLA DE EVIDENCIA: la base no diagnostica. Cada corrección es una hipótesis que debe confirmarse con observación visible del video. Las fuentes académicas apoyan biomecánica/fisiología general; no autorizan inventar métricas, fatiga o puntuación del atleta. Si el video contradice la base, prevalece el video.',
       'REGLA DE SCORING: usa criterios de puntuación solo para explicar valor táctico observable. No declares quién ganó un round salvo que el análisis tenga evidencia suficiente y el producto pida explícitamente una evaluación de scoring.',
       'REGLA DE ESTILO: no atribuyas una conducta a nacionalidad, país o “escuela” como estereotipo. Describe únicamente patrones observados en este atleta y este rival.',

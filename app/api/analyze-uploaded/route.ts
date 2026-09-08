@@ -10,6 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NextRequest, NextResponse } from 'next/server';
 import { boxingKnowledgePrompt } from '../../../lib/boxingKnowledge';
+import { identityInstruction, parseIdentityEvidence, parseTargetIdentity, targetIdentitySchema, TargetIdentity, TargetIdentityContext } from '../../../lib/targetIdentity';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 type UploadedAnalysisRequest = {
   fileName?: string; fileUri?: string; s3Key?: string; mimeType?: string; language?: string; sport?: string; stance?: string;
+  athlete_marker?: string;
   glove_color?: string; top_color?: string; relative_height?: string; build?: string; fighter_notes?: string;
   anchor_x?: string; anchor_y?: string; anchor_size?: string; anchor_time?: string;
   analysis_focus?: string; custom_focus?: string;
@@ -25,8 +27,9 @@ type UploadedAnalysisRequest = {
 
 type ReportPayload = {
   mode: 'real'; provider: 'Gemini'; usedInReport: true; summary: string;
+  targetIdentity: TargetIdentity;
   strengths: string[]; priorities: string[]; opponent: string[]; plan: string[]; drills: string[];
-  evidence: { time: string; title: string; observation: string; correction: string }[];
+  evidence: { time: string; title: string; observation: string; correction: string; targetMatch: boolean }[];
   timings: { preprocessing_ms: number; gemini_processing_ms: number; analysis_ms: number; total_ms: number; clip_count: number };
 };
 type AnalysisJob = {
@@ -362,6 +365,18 @@ function absoluteTime(local: string, offsetSeconds: number) {
   return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
 }
 
+function targetContext(data: UploadedAnalysisRequest): TargetIdentityContext {
+  return {
+    gloveColor: val(data, 'glove_color'),
+    topColor: val(data, 'top_color'),
+    fighterNotes: val(data, 'fighter_notes'),
+    anchorX: val(data, 'anchor_x'),
+    anchorY: val(data, 'anchor_y'),
+    anchorSize: val(data, 'anchor_size', '24'),
+    anchorTime: val(data, 'anchor_time', '0'),
+  };
+}
+
 function buildSegmentPrompt(data: UploadedAnalysisRequest, index: number, count: number, offset: number, duration: number) {
   const descriptors = [
     val(data,'glove_color') && 'guantes ' + val(data,'glove_color'),
@@ -383,53 +398,56 @@ function buildSegmentPrompt(data: UploadedAnalysisRequest, index: number, count:
     '\n' + knowledge.text +
     '\nEste es el segmento ' + (index + 1) + ' de ' + count + ' del mismo round, aproximadamente desde ' + absoluteTime('00:00', offset) + ' hasta ' + absoluteTime('00:00', offset + duration) + '.' +
     '\nPeleador objetivo: ' + (descriptors || 'peleador identificado por el usuario') + '. Guardia: ' + val(data,'stance','unknown') + '. Disciplina: ' + val(data,'sport','boxing') + '.' +
+    '\nANCLA E IDENTIDAD: ' + identityInstruction(targetContext(data), offset, duration) +
     '\nFoco: ' + val(data,'analysis_focus','technique,weaknesses,strategy') + '. ' + val(data,'custom_focus','') +
     '\nNo cambies de peleador si la identidad se vuelve dudosa. No inventes conteos, porcentajes, velocidad ni precisión.' +
     '\nBusca patrones visibles en guardia, base, entradas, salidas, defensa tras combinar, distancia, timing, ángulos, pivotes, footwork, golpes, ritmo, presión y lectura del rival.' +
     '\nConecta observación → consecuencia → corrección → drill. Usa 2–5 evidencias con timestamps MM:SS LOCALES de este segmento.' +
-    '\nsummary debe ser breve (1–2 frases) y específico para este segmento. Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.';
+    '\nsummary debe ser breve (1–2 frases) y específico para este segmento. Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, priorities, opponent, plan, drills y evidence.';
 }
 
-function mergeSegmentReports(parts: Record<string, unknown>[], offsets: number[]) {
+function mergeSegmentReports(parts: Record<string, unknown>[], offsets: number[], data: UploadedAnalysisRequest) {
   const stringList = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
   const unique = (values: string[], limit: number) => Array.from(new Set(values.map(x => x.trim()).filter(Boolean))).slice(0, limit);
-  const evidence: { time: string; title: string; observation: string; correction: string }[] = [];
-  for (let i = 0; i < parts.length; i++) {
-    const items = Array.isArray(parts[i].evidence) ? parts[i].evidence as unknown[] : [];
+  const accepted = parts.map((part, index) => ({ part, index, identity: parseTargetIdentity(part.targetIdentity, targetContext(data)) }))
+    .filter((item): item is { part: Record<string, unknown>; index: number; identity: TargetIdentity } => Boolean(item.identity));
+  if (!accepted.length) throw new Error('No pudimos confirmar que el análisis siguiera al peleador seleccionado. Ajusta el círculo o agrega rasgos visibles y reintenta.');
+  const evidence: { time: string; title: string; observation: string; correction: string; targetMatch: boolean }[] = [];
+  for (const acceptedPart of accepted) {
+    const items = Array.isArray(acceptedPart.part.evidence) ? acceptedPart.part.evidence as unknown[] : [];
     for (const raw of items) {
-      if (!raw || typeof raw !== 'object') continue;
-      const item = raw as Record<string, unknown>;
-      const local = typeof item.time === 'string' ? item.time : '00:00';
-      const observation = typeof item.observation === 'string' ? item.observation : '';
-      if (!observation) continue;
+      const item = parseIdentityEvidence(raw);
+      if (!item) continue;
       evidence.push({
-        time: absoluteTime(local, offsets[i] || 0),
-        title: typeof item.title === 'string' ? item.title : 'Evidencia',
-        observation,
-        correction: typeof item.correction === 'string' ? item.correction : '',
+        ...item,
+        time: absoluteTime(item.time, offsets[acceptedPart.index] || 0),
       });
     }
   }
   evidence.sort((a,b) => a.time.localeCompare(b.time));
+  const acceptedParts = accepted.map(item => item.part);
+  const targetIdentity = accepted.reduce((best, item) => item.identity.confidence > best.confidence ? item.identity : best, accepted[0].identity);
   return {
-    summary: parts.map(x => typeof x.summary === 'string' ? x.summary.trim() : '').filter(Boolean).slice(0, 3).join(' '),
-    strengths: unique(parts.flatMap(x => stringList(x.strengths)), 5),
-    priorities: unique(parts.flatMap(x => stringList(x.priorities)), 3),
-    opponent: unique(parts.flatMap(x => stringList(x.opponent)), 5),
-    plan: unique(parts.flatMap(x => stringList(x.plan)), 6),
-    drills: unique(parts.flatMap(x => stringList(x.drills)), 6),
+    targetIdentity,
+    summary: acceptedParts.map(x => typeof x.summary === 'string' ? x.summary.trim() : '').filter(Boolean).slice(0, 3).join(' '),
+    strengths: unique(acceptedParts.flatMap(x => stringList(x.strengths)), 5),
+    priorities: unique(acceptedParts.flatMap(x => stringList(x.priorities)), 3),
+    opponent: unique(acceptedParts.flatMap(x => stringList(x.opponent)), 5),
+    plan: unique(acceptedParts.flatMap(x => stringList(x.plan)), 6),
+    drills: unique(acceptedParts.flatMap(x => stringList(x.drills)), 6),
     evidence: evidence.slice(0, 8),
   };
 }
 
 const coachingSchema = {
   type: 'object', properties: {
+    targetIdentity: targetIdentitySchema,
     summary: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
     opponent: { type: 'array', items: { type: 'string' } }, plan: { type: 'array', items: { type: 'string' } }, drills: { type: 'array', items: { type: 'string' } },
     evidence: { type: 'array', items: { type: 'object', properties: {
-      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' },
-    }, required: ['time','title','observation','correction'] } },
-  }, required: ['summary','strengths','priorities','opponent','plan','drills','evidence'],
+      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' }, targetMatch: { type: 'boolean' },
+    }, required: ['time','title','observation','correction','targetMatch'] } },
+  }, required: ['targetIdentity','summary','strengths','priorities','opponent','plan','drills','evidence'],
 };
 
 function cleanGeminiJson(text: string) {
@@ -846,10 +864,11 @@ async function completeAnalysis(
               segment.path,
             )
           );
-          const merged = mergeSegmentReports(parts, inline.segments.map(segment => segment.offset));
+          const merged = mergeSegmentReports(parts, inline.segments.map(segment => segment.offset), data);
           const analysisMs = Date.now() - analysisStartedAt;
           return {
             mode: 'real', provider: 'Gemini', usedInReport: true,
+            targetIdentity: merged.targetIdentity,
             summary: merged.summary || 'Análisis completado con Gemini.',
             strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
             plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
@@ -886,10 +905,11 @@ async function completeAnalysis(
           false,
         )
       );
-      const merged = mergeSegmentReports(parts, segments.map(segment => segment.offset));
+      const merged = mergeSegmentReports(parts, segments.map(segment => segment.offset), data);
       const analysisMs = Date.now() - analysisStartedAt;
       return {
         mode: 'real', provider: 'Gemini', usedInReport: true,
+        targetIdentity: merged.targetIdentity,
         summary: merged.summary || 'Análisis completado con Gemini.',
         strengths: merged.strengths, priorities: merged.priorities.slice(0, 3), opponent: merged.opponent,
         plan: merged.plan, drills: merged.drills, evidence: merged.evidence,
@@ -952,6 +972,7 @@ VIDEO Y OBJETIVO:
 - Guardia declarada del atleta: ${val(data,'stance','unknown')}.
 - Peleador objetivo: ${descriptors || 'peleador seleccionado visualmente por el usuario'}.
 - ${anchor}
+- ${identityInstruction(targetContext(data))}
 - Si la identidad se vuelve dudosa, NO cambies de peleador silenciosamente: usa solo momentos en que estés seguro.
 
 FOCO PEDIDO POR EL ATLETA:
@@ -967,23 +988,23 @@ ESTÁNDAR DE COACHING:
 6. Prioriza SOLO 3 correcciones de mayor impacto. Deben ser específicas y desarrolladas.
 7. Explica cómo explotar estratégicamente cada fortaleza.
 8. Cada drill debe corresponder a una prioridad e incluir estructura práctica y objetivo técnico.
-9. evidence usa timestamps MM:SS realmente visibles; 4–8 momentos distribuidos cuando el video lo permita. observation dice qué se ve y correction exactamente qué hacer distinto.
+9. evidence usa timestamps MM:SS realmente visibles; 4–8 momentos distribuidos cuando el video lo permita. observation dice qué se ve, correction exactamente qué hacer distinto y targetMatch solo es true cuando el momento pertenece al atleta objetivo.
 10. summary es diagnóstico de 4–7 frases: estilo, limitación principal, explotación del rival, fortaleza útil y cambio #1 para la próxima sesión.
 
-Devuelve exclusivamente JSON válido con summary, strengths, priorities, opponent, plan, drills y evidence.`;
+Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, priorities, opponent, plan, drills y evidence.`;
 
     const geminiProcessingMs = Date.now() - processingStartedAt;
     const analysisStartedAt = Date.now();
     await updateJob?.('coaching');
     const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
+    const targetIdentity = parseTargetIdentity(parsed.targetIdentity, targetContext(data));
+    if (!targetIdentity) throw new Error('No pudimos confirmar que el análisis siguiera al peleador seleccionado. Ajusta el círculo o agrega rasgos visibles y reintenta.');
     const list = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
-    const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.filter(x => x && typeof x === 'object').map(x => {
-      const item = x as Record<string, unknown>;
-      return { time: typeof item.time === 'string' ? item.time : '00:00', title: typeof item.title === 'string' ? item.title : 'Evidencia', observation: typeof item.observation === 'string' ? item.observation : '', correction: typeof item.correction === 'string' ? item.correction : '' };
-    }).filter(x => /^\d{1,2}:\d{2}$/.test(x.time) && x.observation) : [];
+    const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.map(parseIdentityEvidence).filter((item): item is NonNullable<typeof item> => Boolean(item)) : [];
 
     return {
       mode: 'real', provider: 'Gemini', usedInReport: true,
+      targetIdentity,
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Análisis completado con Gemini.',
       strengths: list(parsed.strengths), priorities: list(parsed.priorities).slice(0, 3), opponent: list(parsed.opponent),
       plan: list(parsed.plan), drills: list(parsed.drills), evidence,

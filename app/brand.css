@@ -1,0 +1,16 @@
+.brandIcon {
+  width: 46px;
+  height: 46px;
+  display: block;
+  object-fit: cover;
+  border-radius: 11px;
+  box-shadow: 0 0 0 1px #d7a84a88, 0 5px 18px #000;
+}
+
+@media (max-width: 720px) {
+  .brandIcon {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+  }
+}

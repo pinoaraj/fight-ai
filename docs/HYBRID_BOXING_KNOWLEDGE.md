@@ -2,6 +2,8 @@
 
 Version: `2026.09.04-v3`
 
+Institutional catalog: `docs/BOXING_PROGRAM_CATALOG.md` (`2026.09.07-v1`). Its university, governing-body, high-performance and academy records provide bounded provenance/context only; inclusion is not a ranking or endorsement and never replaces visible video evidence.
+
 ## Purpose
 
 Fight AI uses a hybrid knowledge layer to make video analysis more consistent without replacing direct observation. The database does **not** diagnose the athlete by itself. It provides candidate principles that Gemini must validate against visible evidence in the sparring video.

@@ -1,10 +1,10 @@
 # Grapify / Fight AI — Living Product & Architecture Spec
 
-_Last updated: 2026-09-07_
+_Last updated: 2026-09-08_
 
 > Runtime checkpoint: the canonical web beta now runs on the owner's Windows PC over the private LAN. Local Next.js + FFmpeg + server-side Gemini is the active path. AWS sections remain historical/optional, and AWS workflows stay manual-only. `docs/LOCAL_PC_SERVER.md` defines the authoritative Windows launcher behavior.
 
-> Verified local checkpoint (2026-09-07): the exact 274.6 MB HEVC regression round completed for the visually marked red-gloves fighter in 2 min 24 s. Gemini produced a real coaching report with six timestamp findings; all six JPEG evidence captures rendered and unlocked PDF export. Desktop/Pixel virtual-agent QA passed 14 tests with two device-specific skips. The retired CloudFront hostname does not currently resolve and is not a valid beta entry point.
+> Verified local checkpoint (2026-09-08): the exact 274.6 MB HEVC regression round completed in 137 s for the visually marked red/white-gloves fighter. The identity contract confirmed that athlete at 98% confidence, explicitly distinguished the black-gloves opponent, produced five timestamp findings, rendered five real JPEG evidence captures and unlocked PDF export. Desktop/Pixel virtual-agent QA passed 16 tests with two device-specific skips. The retired CloudFront hostname is not the active beta entry point.
 
 ## 1. Product goal
 Fight AI is a boxing/kickboxing sparring-analysis platform with mobile and web clients sharing one analysis contract. It must provide coach-style feedback grounded in visible video evidence, never invented strike counts or unsupported certainty.
@@ -67,6 +67,12 @@ Web multipart identity fields now include:
 - `anchor_size`
 - `anchor_time`
 - `stance`
+
+Every accepted real report now also carries a server-validated `targetIdentity` object: requested gloves, observed gloves, anchor match (`confirmed`, `uncertain` or `conflict`), confidence and notes. Every evidence item carries `targetMatch`. A marked-anchor report is rejected unless the model confirms the anchor, confidence is at least 0.60, requested/observed glove families agree, and accepted evidence belongs to the target. Segment prompts repeat the original anchor coordinates, size and time; segment merge discards identity-conflicting windows instead of allowing a silent fighter switch. The client performs the same validation before rendering a report.
+
+## 3.1 Curated boxing-program catalog
+
+The hybrid knowledge layer includes a versioned, source-linked catalog of documented boxing programs and institutions (`2026.09.07-v1`). It currently covers Liverpool John Moores University, Edge Hill University, INSEP, USA Boxing, England Boxing, GB Boxing, Gleason's Gym and Wild Card Boxing Club. Entries are contextual references, not a ranking or endorsement; prestige is never treated as technical evidence. See `docs/BOXING_PROGRAM_CATALOG.md`.
 
 ## 4. Mobile baseline
 Android remains the interaction source of truth for fighter selection, provider attribution, visual correction guidance and report semantics. Web should mirror Android intent while adapting controls for browser use.
