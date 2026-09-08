@@ -29,7 +29,7 @@ type ReportPayload = {
   mode: 'real'; provider: 'Gemini'; usedInReport: true; summary: string;
   targetIdentity: TargetIdentity;
   strengths: string[]; priorities: string[]; opponent: string[]; plan: string[]; drills: string[];
-  evidence: { time: string; title: string; observation: string; correction: string; targetMatch: boolean }[];
+  evidence: { time: string; title: string; observation: string; correction: string; targetMatch: boolean; identityBasis: string }[];
   timings: { preprocessing_ms: number; gemini_processing_ms: number; analysis_ms: number; total_ms: number; clip_count: number };
 };
 type AnalysisJob = {
@@ -412,7 +412,7 @@ function mergeSegmentReports(parts: Record<string, unknown>[], offsets: number[]
   const accepted = parts.map((part, index) => ({ part, index, identity: parseTargetIdentity(part.targetIdentity, targetContext(data)) }))
     .filter((item): item is { part: Record<string, unknown>; index: number; identity: TargetIdentity } => Boolean(item.identity));
   if (!accepted.length) throw new Error('No pudimos confirmar que el análisis siguiera al peleador seleccionado. Ajusta el círculo o agrega rasgos visibles y reintenta.');
-  const evidence: { time: string; title: string; observation: string; correction: string; targetMatch: boolean }[] = [];
+  const evidence: { time: string; title: string; observation: string; correction: string; targetMatch: boolean; identityBasis: string }[] = [];
   for (const acceptedPart of accepted) {
     const items = Array.isArray(acceptedPart.part.evidence) ? acceptedPart.part.evidence as unknown[] : [];
     for (const raw of items) {
@@ -445,8 +445,8 @@ const coachingSchema = {
     summary: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
     opponent: { type: 'array', items: { type: 'string' } }, plan: { type: 'array', items: { type: 'string' } }, drills: { type: 'array', items: { type: 'string' } },
     evidence: { type: 'array', items: { type: 'object', properties: {
-      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' }, targetMatch: { type: 'boolean' },
-    }, required: ['time','title','observation','correction','targetMatch'] } },
+      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' }, targetMatch: { type: 'boolean' }, identityBasis: { type: 'string' },
+    }, required: ['time','title','observation','correction','targetMatch','identityBasis'] } },
   }, required: ['targetIdentity','summary','strengths','priorities','opponent','plan','drills','evidence'],
 };
 
@@ -988,7 +988,7 @@ ESTÁNDAR DE COACHING:
 6. Prioriza SOLO 3 correcciones de mayor impacto. Deben ser específicas y desarrolladas.
 7. Explica cómo explotar estratégicamente cada fortaleza.
 8. Cada drill debe corresponder a una prioridad e incluir estructura práctica y objetivo técnico.
-9. evidence usa timestamps MM:SS realmente visibles; 4–8 momentos distribuidos cuando el video lo permita. observation dice qué se ve, correction exactamente qué hacer distinto y targetMatch solo es true cuando el momento pertenece al atleta objetivo.
+9. evidence usa timestamps MM:SS realmente visibles; 4–8 momentos distribuidos cuando el video lo permita. observation dice qué se ve, correction exactamente qué hacer distinto, targetMatch solo es true cuando el momento pertenece al atleta objetivo e identityBasis indica qué rasgo visible lo conecta con el atleta marcado.
 10. summary es diagnóstico de 4–7 frases: estilo, limitación principal, explotación del rival, fortaleza útil y cambio #1 para la próxima sesión.
 
 Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, priorities, opponent, plan, drills y evidence.`;

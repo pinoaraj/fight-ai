@@ -52,6 +52,7 @@ function normalizeReport(raw: unknown, source: FormData) {
       observation: typeof x.description === 'string' ? x.description : '',
       correction: typeof x.recommendation === 'string' ? x.recommendation : typeof x.whyItMatters === 'string' ? x.whyItMatters : '',
       targetMatch: x.targetMatch === true,
+      identityBasis: typeof x.identityBasis === 'string' ? x.identityBasis.trim() : '',
     }));
   });
   return {
@@ -88,8 +89,8 @@ const coachingSchema = {
     summary: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
     opponent: { type: 'array', items: { type: 'string' } }, plan: { type: 'array', items: { type: 'string' } }, drills: { type: 'array', items: { type: 'string' } },
     evidence: { type: 'array', items: { type: 'object', properties: {
-      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' }, targetMatch: { type: 'boolean' },
-    }, required: ['time','title','observation','correction','targetMatch'] } },
+      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' }, targetMatch: { type: 'boolean' }, identityBasis: { type: 'string' },
+    }, required: ['time','title','observation','correction','targetMatch','identityBasis'] } },
   }, required: ['targetIdentity','summary','strengths','priorities','opponent','plan','drills','evidence'],
 };
 
@@ -106,7 +107,7 @@ function interactionOutputText(raw: unknown) {
   return chunks.join('').trim();
 }
 
-async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string) {
+async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, anchorReferenceUris: string[] = []) {
   const configured = process.env.GEMINI_MODEL?.trim();
   const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
   let lastStatus = 0; let retryAfter = 0;
@@ -117,7 +118,19 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
       try {
         response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
           method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, input: [{ type: 'video', uri: fileUri, mime_type: mimeType }, { type: 'text', text: prompt }], response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema }, store: false }), cache: 'no-store',
+          body: JSON.stringify({
+            model,
+            input: [
+              ...anchorReferenceUris.flatMap((uri, index) => [
+                { type: 'text', text: index === 0 ? 'REFERENCIA 1: frame completo. El rectángulo dorado identifica al atleta objetivo.' : 'REFERENCIA 2: recorte cercano del mismo atleta objetivo.' },
+                { type: 'image', uri, mime_type: 'image/jpeg' },
+              ]),
+              { type: 'video', uri: fileUri, mime_type: mimeType },
+              { type: 'text', text: prompt },
+            ],
+            response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
+            store: false,
+          }), cache: 'no-store',
           signal: AbortSignal.timeout(4 * 60 * 1000),
         });
       } catch {
@@ -196,6 +209,76 @@ function makeCompactCompatibleClip(inputPath: string, outputPath: string) {
   });
 }
 
+function makeAnchorReferenceImage(inputPath: string, outputPath: string, atSeconds: number, filter: string) {
+  return new Promise<void>((resolve, reject) => {
+    const encoder = spawn('ffmpeg', [
+      '-hide_banner','-loglevel','error','-y','-ss',String(Math.max(.1, Math.min(179.5, atSeconds))),
+      '-i',inputPath,'-frames:v','1','-vf',filter,'-q:v','2',outputPath,
+    ], { stdio: ['ignore','ignore','pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('La referencia visual tardó demasiado.')); }, 45_000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no pudo crear la referencia visual.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo crear la referencia visual del atleta.'));
+    });
+  });
+}
+
+async function uploadAnchorReference(apiKey: string, path: string, displayName: string) {
+  const info = await stat(path);
+  let startUpload: Response | undefined;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    startUpload = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': apiKey,
+        'X-Goog-Upload-Protocol': 'resumable',
+        'X-Goog-Upload-Command': 'start',
+        'X-Goog-Upload-Header-Content-Length': String(info.size),
+        'X-Goog-Upload-Header-Content-Type': 'image/jpeg',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ file: { display_name: displayName } }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (startUpload.ok || ![429,500,502,503,504].includes(startUpload.status)) break;
+    if (attempt < 2) await sleep(2500 * (attempt + 1));
+  }
+  if (!startUpload?.ok) throw new Error(`Gemini no pudo recibir la referencia visual (${startUpload?.status || 0}).`);
+  const uploadUrl = startUpload.headers.get('x-goog-upload-url');
+  if (!uploadUrl) throw new Error('Gemini no devolvió URL para la referencia visual.');
+  const uploaded = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'Content-Length': String(info.size), 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' },
+    body: Readable.toWeb(createReadStream(path) as Readable),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(60_000),
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+  if (!uploaded.ok) throw new Error(`Gemini no pudo cargar la referencia visual (${uploaded.status}).`);
+  const payload = await uploaded.json() as { file?: { name?: string; uri?: string; state?: string } };
+  const name = payload.file?.name;
+  const uri = payload.file?.uri;
+  if (!name || !uri) throw new Error('Gemini no devolvió la referencia visual cargada.');
+  let state = payload.file?.state || 'PROCESSING';
+  const deadline = Date.now() + 90_000;
+  while (state !== 'ACTIVE' && Date.now() < deadline) {
+    if (state === 'FAILED') throw new Error('Gemini rechazó la referencia visual.');
+    await sleep(1000);
+    const status = await fetch(`https://generativelanguage.googleapis.com/v1beta/${name}`, {
+      headers: { 'x-goog-api-key': apiKey }, cache: 'no-store', signal: AbortSignal.timeout(20_000),
+    });
+    if (!status.ok) throw new Error(`No se pudo verificar la referencia visual (${status.status}).`);
+    state = (await status.json() as { state?: string }).state || 'PROCESSING';
+  }
+  if (state !== 'ACTIVE') throw new Error('Gemini tardó demasiado en preparar la referencia visual.');
+  return uri;
+}
+
 
 async function analyzeWithGemini(source: FormData, updateStatus?: (status: string) => void | Promise<void>) {
   const startedAt = Date.now();
@@ -210,6 +293,8 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
     ? join(tmpdir(), `fight-ai-staged-${stagedVideoId}.mp4`)
     : join(tmpdir(), `fight-ai-local-source-${randomUUID()}.mp4`);
   const clipPath = join(tmpdir(), `fight-ai-local-round-${randomUUID()}.mp4`);
+  const markedReferencePath = join(tmpdir(), `fight-ai-anchor-marked-${randomUUID()}.jpg`);
+  const croppedReferencePath = join(tmpdir(), `fight-ai-anchor-crop-${randomUUID()}.jpg`);
   const videoName = hasStagedVideo ? field(source, 'video_name', 'fight-ai-sparring.mp4') : (video as File).name || 'fight-ai-sparring.mp4';
   let originalSize = hasStagedVideo ? Number(field(source, 'video_size', '0')) || 0 : (video as File).size;
   let preprocessingMs = 0;
@@ -242,6 +327,27 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
       clip = await stat(clipPath);
       if (!clip.size) throw new Error('El clip compatible local quedó vacío.');
     }
+
+    const identityContext = targetContext(source);
+    const anchorX = Number(identityContext.anchorX);
+    const anchorY = Number(identityContext.anchorY);
+    const anchorTime = Number(identityContext.anchorTime);
+    const hasVisualAnchor = Number.isFinite(anchorX) && Number.isFinite(anchorY) && Number.isFinite(anchorTime)
+      && identityContext.anchorX !== '' && identityContext.anchorY !== ''
+      && anchorX >= 0 && anchorX <= 100 && anchorY >= 0 && anchorY <= 100;
+    if (!hasVisualAnchor) throw new Error('Falta una marca visual válida del peleador. Vuelve a marcarlo antes de analizar.');
+
+    const normalizedX = anchorX / 100;
+    const normalizedY = anchorY / 100;
+    const anchorScale = Math.max(.12, Math.min(.48, Number(identityContext.anchorSize || 24) / 100));
+    const cropWidth = Math.max(.30, Math.min(.46, anchorScale * 1.65));
+    const cropHeight = Math.max(.68, Math.min(.92, cropWidth * 1.9));
+    const cropLeft = Math.max(0, Math.min(1 - cropWidth, normalizedX - cropWidth / 2));
+    const cropTop = Math.max(0, Math.min(1 - cropHeight, normalizedY - cropHeight / 2));
+    const markedFilter = `drawbox=x=iw*${cropLeft.toFixed(5)}:y=ih*${cropTop.toFixed(5)}:w=iw*${cropWidth.toFixed(5)}:h=ih*${cropHeight.toFixed(5)}:color=0xd7a84a@0.95:t=8,scale=-2:720`;
+    const croppedFilter = `crop=iw*${cropWidth.toFixed(5)}:ih*${cropHeight.toFixed(5)}:iw*${cropLeft.toFixed(5)}:ih*${cropTop.toFixed(5)},scale=-2:720`;
+    await makeAnchorReferenceImage(inputPath, markedReferencePath, anchorTime, markedFilter);
+    await makeAnchorReferenceImage(inputPath, croppedReferencePath, anchorTime, croppedFilter);
     preprocessingMs = Date.now() - preprocessingStarted;
 
     const mimeType = 'video/mp4';
@@ -307,6 +413,10 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
       state = (await status.json() as { state?: string }).state || 'PROCESSING';
     }
     if (state !== 'ACTIVE') throw new Error('Gemini tardó demasiado en preparar el video.');
+    const anchorReferenceUris = await Promise.all([
+      uploadAnchorReference(apiKey, markedReferencePath, `fight-ai-target-marked-${videoName}`.slice(0, 160)),
+      uploadAnchorReference(apiKey, croppedReferencePath, `fight-ai-target-crop-${videoName}`.slice(0, 160)),
+    ]);
     processingMs = Date.now() - processingStarted;
 
     const language = field(source, 'language', 'es');
@@ -319,9 +429,9 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
       field(source,'build') && `contextura ${field(source,'build')}`,
       field(source,'fighter_notes'),
     ].filter(Boolean).join('; ');
-    const anchorTime = Number(field(source,'anchor_time','0')) || 0;
+    const promptAnchorTime = Number(field(source,'anchor_time','0')) || 0;
     const anchor = field(source,'anchor_x') && field(source,'anchor_y')
-      ? `El usuario marcó al peleador en t=${anchorTime.toFixed(1)}s cerca de x=${field(source,'anchor_x')}%, y=${field(source,'anchor_y')}%. Usa ese momento como ancla visual y mantén la identidad por continuidad temporal.`
+      ? `El usuario marcó al peleador en t=${promptAnchorTime.toFixed(1)}s cerca de x=${field(source,'anchor_x')}%, y=${field(source,'anchor_y')}%. Usa ese momento como ancla visual y mantén la identidad por continuidad temporal.`
       : 'Mantén la identidad usando las características visibles y continuidad temporal.';
     const focuses = field(source,'analysis_focus','technique,weaknesses,strategy');
     const customFocus = field(source,'custom_focus');
@@ -363,7 +473,7 @@ Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, pri
 
     await updateStatus?.('coaching');
     const analysisStarted = Date.now();
-    const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType);
+    const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType, anchorReferenceUris);
     const analysisMs = Date.now() - analysisStarted;
     const targetIdentity = parseTargetIdentity(parsed.targetIdentity, targetContext(source));
     if (!targetIdentity) throw new Error('No pudimos confirmar que el análisis siguiera al peleador seleccionado. Ajusta el círculo o agrega rasgos visibles y reintenta.');
@@ -401,6 +511,8 @@ Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, pri
       // or the preview session is explicitly deleted.
       hasStagedVideo ? Promise.resolve() : unlink(inputPath).catch(() => undefined),
       unlink(clipPath).catch(() => undefined),
+      unlink(markedReferencePath).catch(() => undefined),
+      unlink(croppedReferencePath).catch(() => undefined),
     ]);
   }
 }

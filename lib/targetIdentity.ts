@@ -22,6 +22,7 @@ export type IdentityEvidence = {
   observation: string;
   correction: string;
   targetMatch: boolean;
+  identityBasis: string;
 };
 
 export const targetIdentitySchema = {
@@ -84,7 +85,7 @@ export function identityInstruction(context: TargetIdentityContext, offset = 0, 
   const anchor = anchorAvailable
     ? `El usuario marcó al atleta objetivo en el video original en t=${anchorTime.toFixed(1)}s, x=${Number(context.anchorX).toFixed(1)}%, y=${Number(context.anchorY).toFixed(1)}%, círculo=${Number(context.anchorSize || 24).toFixed(1)}%. ${withinSegment ? `En este segmento esa ancla aparece aproximadamente en t=${localAnchor?.toFixed(1)}s.` : 'El momento del ancla queda fuera de este segmento; conserva la misma identidad usando los rasgos declarados y continuidad temporal, y declara baja confianza si no puedes confirmarla.'}`
     : 'No existe ancla de coordenadas válida; identifica al atleta únicamente con los rasgos declarados y declara baja confianza si son ambiguos.';
-  return `${anchor}\nNo intercambies atleta y rival aunque cambien de lado. targetIdentity debe declarar requestedGloves exactamente como fue solicitado, observedGloves según lo realmente visible, anchorMatch como confirmed, uncertain o conflict, confidence entre 0 y 1 y notes con la base visual de la decisión. Usa confirmed solo cuando la continuidad con el atleta marcado y sus rasgos sea consistente. En cada evidence, targetMatch solo puede ser true si el momento corresponde al atleta objetivo. Omite evidencia dudosa.`;
+  return `${anchor}\nNo intercambies atleta y rival aunque cambien de lado. Las imágenes de referencia enviadas antes del video son la fuente de verdad visual: la primera muestra el frame completo con un rectángulo dorado alrededor del atleta elegido y la segunda es un recorte cercano del mismo atleta. targetIdentity debe declarar requestedGloves exactamente como fue solicitado, observedGloves según lo realmente visible, anchorMatch como confirmed, uncertain o conflict, confidence entre 0 y 1 y notes con la base visual de la decisión. Usa confirmed solo cuando la continuidad con el atleta marcado y sus rasgos sea consistente. En cada evidence, targetMatch solo puede ser true si el momento corresponde al atleta objetivo; identityBasis debe describir qué rasgo visible de la referencia confirma que es ese atleta y no el rival. Omite evidencia dudosa.`;
 }
 
 export function parseTargetIdentity(raw: unknown, context: TargetIdentityContext): TargetIdentity | null {
@@ -129,6 +130,7 @@ export function parseIdentityEvidence(raw: unknown): IdentityEvidence | null {
     observation: typeof item.observation === 'string' ? item.observation : '',
     correction: typeof item.correction === 'string' ? item.correction : '',
     targetMatch: item.targetMatch === true,
+    identityBasis: typeof item.identityBasis === 'string' ? item.identityBasis.trim() : '',
   };
-  return /^\d{1,2}:\d{2}$/.test(evidence.time) && evidence.observation && evidence.targetMatch ? evidence : null;
+  return /^\d{1,2}:\d{2}$/.test(evidence.time) && evidence.observation && evidence.targetMatch && evidence.identityBasis ? evidence : null;
 }

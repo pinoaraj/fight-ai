@@ -7,6 +7,17 @@ function realVideo() {
   return { name: 'agent-sparring.mp4', mimeType: 'video/mp4', buffer: Buffer.from(source, 'base64') };
 }
 
+async function markVisibleFighter(page: import('@playwright/test').Page) {
+  await expect(page.getByTestId('preview-status')).toContainText('AHORA MARCA A TU PELEADOR', { timeout: 15_000 });
+  await page.getByTestId('mark-fighter').click();
+  const overlay = page.getByTestId('marker-overlay');
+  await expect(overlay).toBeVisible();
+  const box = await overlay.boundingBox();
+  expect(box).not.toBeNull();
+  await overlay.click({ position: { x: Math.round((box?.width || 100) * .72), y: Math.round((box?.height || 100) * .58) } });
+  await expect(page.getByText(/Peleador marcado en/)).toBeVisible();
+}
+
 test('virtual athlete can navigate rich demo coaching report with playable evidence', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Tu sparring/i })).toBeVisible();
@@ -95,7 +106,7 @@ test('browser uses multipart S3 then a durable uploaded-file analysis job', asyn
           summary: 'QA streamed browser path verified.',
           strengths: ['Presión útil con jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'],
           drills: ['Step-jab + pivote · 3×2 min'],
-          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base antes del golpe', targetMatch: true }],
+          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base antes del golpe', targetMatch: true, identityBasis: 'Guantes rojos coinciden con la referencia.' }],
         },
       }),
     });
@@ -104,6 +115,7 @@ test('browser uses multipart S3 then a durable uploaded-file analysis job', asyn
 
   await page.goto('/');
   await page.getByTestId('video-input').setInputFiles(video);
+  await markVisibleFighter(page);
   await page.getByTestId('glove-color').fill('rojos');
   await page.getByTestId('analyze-button').click();
   await expect(page.getByText('QA streamed browser path verified.', { exact: true })).toBeVisible({ timeout: 20_000 });
@@ -151,6 +163,7 @@ test('client rejects a report that switched from red gloves to the black-gloves 
 
   await page.goto('/');
   await page.getByTestId('video-input').setInputFiles(video);
+  await markVisibleFighter(page);
   await page.getByTestId('glove-color').fill('rojos');
   await page.getByTestId('analyze-button').click();
   await expect(page.locator('.error[role="alert"]')).toContainText('El reporte no coincide con el peleador seleccionado (rojos). Gemini observó guantes negros.', { timeout: 20_000 });
@@ -194,13 +207,14 @@ test('mobile upload falls back to same-origin proxy when signed S3 PUT fails', a
         mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Fallback móvil verificado.',
         targetIdentity: { requestedGloves: 'rojos', observedGloves: 'rojos', anchorMatch: 'confirmed', confidence: .96, notes: 'Coincide con los guantes declarados.' },
         strengths: ['Jab'], priorities: ['Ángulo'], opponent: ['Retrocede'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
-        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Visible', correction: 'Salir por ángulo', targetMatch: true }],
+        evidence: [{ time: '00:02', title: 'Entrada', observation: 'Visible', correction: 'Salir por ángulo', targetMatch: true, identityBasis: 'Guantes rojos coinciden con la referencia.' }],
       } }),
     });
   });
 
   await page.goto('/');
   await page.getByTestId('video-input').setInputFiles(video);
+  await markVisibleFighter(page);
   await page.getByTestId('glove-color').fill('rojos');
   await page.getByTestId('analyze-button').click();
   await expect(page.getByText('Fallback móvil verificado.', { exact: true })).toBeVisible({ timeout: 20_000 });
@@ -238,7 +252,7 @@ test('a transient durable-job failure retries without uploading the video again'
           mode: 'real', provider: 'Gemini', usedInReport: true, summary: 'Reintento sin segunda carga verificado.',
           targetIdentity: { requestedGloves: 'rojos', observedGloves: 'rojos', anchorMatch: 'confirmed', confidence: .95, notes: 'Coincide con los guantes declarados.' },
           strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
-          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base', targetMatch: true }],
+          evidence: [{ time: '00:02', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base', targetMatch: true, identityBasis: 'Guantes rojos coinciden con la referencia.' }],
         },
       }),
     });
@@ -246,6 +260,7 @@ test('a transient durable-job failure retries without uploading the video again'
 
   await page.goto('/');
   await page.getByTestId('video-input').setInputFiles(video);
+  await markVisibleFighter(page);
   await page.getByTestId('glove-color').fill('rojos');
   await page.getByTestId('analyze-button').click();
   const retry = page.getByTestId('retry-uploaded-analysis');
@@ -287,8 +302,8 @@ test('virtual athlete can identify fighter choose coach focus submit analysis an
         targetIdentity: { requestedGloves: 'azules', observedGloves: 'azules', anchorMatch: 'confirmed', confidence: .91, notes: 'Coincide con los guantes declarados.' },
         strengths: ['Jab'], priorities: ['Salir por ángulo'], opponent: ['Cede al jab'], plan: ['Jab y pivote'], drills: ['Pivote · 3×2 min'],
         evidence: [
-          { time: '00:01', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base', targetMatch: true },
-          { time: '00:02', title: 'Salida', observation: 'Salida lineal', correction: 'Pivotar tras golpear', targetMatch: true },
+          { time: '00:01', title: 'Entrada', observation: 'Entrada visible', correction: 'Cerrar con la base', targetMatch: true, identityBasis: 'Guantes azules coinciden con la referencia.' },
+          { time: '00:02', title: 'Salida', observation: 'Salida lineal', correction: 'Pivotar tras golpear', targetMatch: true, identityBasis: 'Guantes azules coinciden con la referencia.' },
         ],
       },
     }) });
@@ -297,6 +312,7 @@ test('virtual athlete can identify fighter choose coach focus submit analysis an
   await page.getByTestId('video-input').setInputFiles(realVideo());
   const sourcePreview = page.getByTestId('video-preview');
   await expect(sourcePreview).toBeVisible();
+  await markVisibleFighter(page);
   await page.getByTestId('glove-color').fill('azules');
   await page.getByTestId('fighter-notes').fill('polera negra, más alto, shorts verdes');
   await page.getByTestId('focus-footwork').click();

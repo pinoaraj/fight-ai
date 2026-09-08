@@ -62,43 +62,56 @@ function New-FightAiIcon([string]$Path) {
 
 $IconDirectory = Join-Path $env:LOCALAPPDATA 'FightAI'
 New-Item -ItemType Directory -Path $IconDirectory -Force | Out-Null
-$IconPath = Join-Path $IconDirectory 'FightAI-Beta-v2.ico'
+$IconPath = Join-Path $IconDirectory 'FightAI-Beta-v3.ico'
 try {
   $SourceIcon = Join-Path $Root 'assets\desktop\fight-ai-icon.png'
   if (Test-Path $SourceIcon) {
     Add-Type -AssemblyName System.Drawing
     $sourceBitmap = [System.Drawing.Bitmap]::FromFile($SourceIcon)
     try {
-      $resized = New-Object System.Drawing.Bitmap 256,256,([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-      $canvas = [System.Drawing.Graphics]::FromImage($resized)
-      try {
-        $canvas.Clear([System.Drawing.Color]::Transparent)
-        $canvas.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-        $canvas.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $canvas.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-        $canvas.DrawImage($sourceBitmap, 0, 0, 256, 256)
-        $pngStream = New-Object System.IO.MemoryStream
+      # Explorer uses different icon sizes depending on DPI and view mode. A
+      # single 256 px frame can fall back to the generic .cmd icon, so write a
+      # standards-compatible multi-image ICO with a PNG frame for every common
+      # Windows shell size.
+      $frames = @()
+      foreach ($size in @(16,20,24,32,40,48,64,96,128,256)) {
+        $resized = New-Object System.Drawing.Bitmap $size,$size,([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $canvas = [System.Drawing.Graphics]::FromImage($resized)
         try {
-          $resized.Save($pngStream, [System.Drawing.Imaging.ImageFormat]::Png)
-          $pngBytes = $pngStream.ToArray()
-          $stream = [System.IO.File]::Open($IconPath, [System.IO.FileMode]::Create)
-          $writer = New-Object System.IO.BinaryWriter($stream)
+          $canvas.Clear([System.Drawing.Color]::Transparent)
+          $canvas.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+          $canvas.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+          $canvas.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+          $canvas.DrawImage($sourceBitmap, 0, 0, $size, $size)
+          $pngStream = New-Object System.IO.MemoryStream
           try {
-            $writer.Write([UInt16]0)
-            $writer.Write([UInt16]1)
-            $writer.Write([UInt16]1)
-            $writer.Write([byte]0)
-            $writer.Write([byte]0)
-            $writer.Write([byte]0)
-            $writer.Write([byte]0)
-            $writer.Write([UInt16]1)
-            $writer.Write([UInt16]32)
-            $writer.Write([UInt32]$pngBytes.Length)
-            $writer.Write([UInt32]22)
-            $writer.Write($pngBytes)
-          } finally { $writer.Dispose() }
-        } finally { $pngStream.Dispose() }
-      } finally { $canvas.Dispose(); $resized.Dispose() }
+            $resized.Save($pngStream, [System.Drawing.Imaging.ImageFormat]::Png)
+            $frames += [pscustomobject]@{ Size = $size; Bytes = $pngStream.ToArray() }
+          } finally { $pngStream.Dispose() }
+        } finally { $canvas.Dispose(); $resized.Dispose() }
+      }
+
+      $stream = [System.IO.File]::Open($IconPath, [System.IO.FileMode]::Create)
+      $writer = New-Object System.IO.BinaryWriter($stream)
+      try {
+        $writer.Write([UInt16]0)
+        $writer.Write([UInt16]1)
+        $writer.Write([UInt16]$frames.Count)
+        $offset = 6 + (16 * $frames.Count)
+        foreach ($frame in $frames) {
+          $dimension = if ($frame.Size -eq 256) { [byte]0 } else { [byte]$frame.Size }
+          $writer.Write($dimension)
+          $writer.Write($dimension)
+          $writer.Write([byte]0)
+          $writer.Write([byte]0)
+          $writer.Write([UInt16]1)
+          $writer.Write([UInt16]32)
+          $writer.Write([UInt32]$frame.Bytes.Length)
+          $writer.Write([UInt32]$offset)
+          $offset += $frame.Bytes.Length
+        }
+        foreach ($frame in $frames) { $writer.Write($frame.Bytes) }
+      } finally { $writer.Dispose() }
     } finally { $sourceBitmap.Dispose() }
   } else {
     New-FightAiIcon $IconPath
@@ -109,6 +122,10 @@ try {
 }
 
 $ShortcutPath = Join-Path $Desktop 'Fight AI Beta.lnk'
+if (Test-Path -LiteralPath $ShortcutPath) {
+  Remove-Item -LiteralPath $ShortcutPath -Force
+  Start-Sleep -Milliseconds 350
+}
 $Shell = New-Object -ComObject WScript.Shell
 $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $Launcher
@@ -121,6 +138,15 @@ $Shortcut.Save()
 # Refresh Explorer after switching to the versioned icon path.
 $refresh = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'
 if (Test-Path $refresh) { Start-Process -FilePath $refresh -ArgumentList '-show' -WindowStyle Hidden -Wait }
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class FightAIShellRefresh {
+  [DllImport("shell32.dll")]
+  public static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
+}
+'@
+[FightAIShellRefresh]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
 
 Write-Host ''
 Write-Host 'Acceso directo creado correctamente:' -ForegroundColor Green

@@ -261,6 +261,12 @@ The 2026-08-29 web beta upgrade is **materially fixed, validated and deployed fo
 
 The current release candidate replaces the two-step viewer relay with direct multipart S3 and DynamoDB-backed jobs. S3 CORS/TTL and the ECS deployment were verified on 2026-08-31; an actual CloudFront CORS preflight returned HTTP 200 and a durable HEVC job was reclaimed after lease expiry without re-upload. It is not release-approved until the exact HEVC Android/CloudFront report and image-bearing PDF journey pass.
 
+## 15. Visual target identity contract — 2026-09-08
+
+The active local beta requires a fighter marker before analysis. From that marker the server extracts two visual references at the selected timestamp: a complete frame with a gold target box and a tight crop of the selected athlete. Gemini receives both references before the video and must return `targetIdentity`, `targetMatch` and `identityBasis` for every evidence item. Findings without a visible identity basis are rejected instead of being shown as coaching evidence.
+
+The exact `20260827_204921.mp4` regression completed in 141.4 seconds. At 01:28 it identified the selected athlete by white Ringside headgear and red Fairtex gloves and described his body work, correcting the prior black-glove-opponent attribution. This dual-reference path currently applies to the local PC/LAN and authenticated Cloudflare-tunnel beta; equivalent reference-image transport must be added before claiming parity for the managed S3/DynamoDB/AWS path.
+
 
 ## Checkpoint 2026-09-01 — Gemini Files capacity fallback
 

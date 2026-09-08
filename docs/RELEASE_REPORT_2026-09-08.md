@@ -2,28 +2,31 @@
 
 ## Outcome
 
-The Windows-hosted responsive web beta is operational for PC, Android and iOS browsers on the same LAN. The exact regression round `20260827_204921.mp4` (274.6 MB, HEVC, 3:05 source) completed against the local Gemini path in 137 seconds while analyzing only the first 3:00.
+The Windows-hosted responsive web beta is operational for PC, Android and iOS browsers on the same LAN. The exact regression round `20260827_204921.mp4` (274.6 MB, HEVC, 3:05 source) completed against the local Gemini path in 141 seconds while analyzing only the first 3:00.
 
 ## Fighter-identity correction
 
 The athlete selected on the right at 00:05 was the fighter with red/white gloves, white headgear and dark clothing. The returned report confirmed this athlete at 98% confidence and explicitly distinguished the opponent with black gloves.
 
-The root cause was that segmented-video prompts did not repeat the original anchor geometry and merged segments without a machine-enforced identity contract. The repair adds:
+The root cause was that prompt-only geometry and clothing descriptions were not a sufficient visual identity reference across the full round. The repair adds:
 
+- two mandatory Gemini visual references generated from the marked moment: the complete frame with the gold target box and a tight crop of the selected athlete;
 - original anchor x/y, radius, frame time and frame size to every segment prompt;
 - required `targetIdentity` output with requested/observed glove family, anchor match, confidence and notes;
-- required `targetMatch` on every evidence finding;
+- required `targetMatch` and a visible `identityBasis` on every evidence finding;
 - server rejection for conflicts, unconfirmed marked anchors, glove mismatch or confidence below 0.60;
+- a required frame marker in the client before the real analysis can start;
 - client validation before any real report is rendered;
 - identity badge in the web report and printable/PDF output.
 
 ## Operational evidence
 
 - Provider: Gemini, used in the report.
-- Gemini preparation: 12.5 s.
-- Coaching generation: 51.9 s.
-- Total server time: 137 s.
-- Evidence: five timestamped findings with five real JPEG captures.
+- Gemini upload/preparation: 15.4 s.
+- Coaching generation: 45.4 s.
+- Total server time: 141.4 s.
+- Evidence: four timestamped findings with four real JPEG captures and four explicit identity bases.
+- Regression at 01:28: PASS. The report identifies the white Ringside headgear and red Fairtex gloves while describing the selected athlete's body work; it no longer describes the black-glove opponent as the athlete.
 - Visual teaching: three coach diagrams included in the printable report.
 - PDF action: enabled only after every evidence frame is ready.
 
@@ -34,7 +37,7 @@ The hybrid engine now includes the versioned catalog `2026.09.07-v1` with eight 
 ## Branding and launcher
 
 - Website header: branded gold/black glove-and-reticle `FIGHT AI` logo, enlarged to 72 px on desktop and 56 px on mobile with increased header spacing and wordmark legibility.
-- Desktop: `C:\Users\JP\Desktop\Fight AI Beta.lnk` with branded icon and name. The shortcut now points to a versioned standards-compatible PNG-backed ICO instead of a temporary Windows icon handle, and Explorer is refreshed after installation.
+- Desktop: `C:\Users\JP\Desktop\Fight AI Beta.lnk` with branded icon and name. The shortcut now points to the versioned `FightAI-Beta-v3.ico`, containing ten Windows Shell sizes from 16 to 256 px. Installation recreates the `.lnk` and forces a Shell association refresh. A direct `SHGetFileInfo` probe confirmed that Windows resolves the shortcut to the Fight AI logo rather than the generic `.cmd` icon.
 - Daily launcher: `ABRIR_FIGHT_AI.cmd`.
 - PC URL: `http://localhost:8787`.
 - LAN URL used for phone testing: `http://192.168.4.81:8787` (the PC and phone must be on the same network; the LAN IP can change after reconnecting).
@@ -45,7 +48,7 @@ The hybrid engine now includes the versioned catalog `2026.09.07-v1` with eight 
 - TypeScript: PASS.
 - Next.js production build: PASS.
 - Playwright desktop/mobile virtual agents: 16 passed, 2 device-specific skips.
-- Real HEVC upload, frame marking, red-fighter identity, report generation and JPEG evidence: PASS.
+- Real HEVC upload, mandatory frame marking, dual visual identity references, red-fighter identity, 01:28 attribution, report generation and JPEG evidence: PASS.
 
 ## Graphify continuity
 

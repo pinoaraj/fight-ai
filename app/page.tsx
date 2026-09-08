@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseTargetIdentity } from '../lib/targetIdentity';
 
-type Evidence = { time: string; title: string; observation: string; correction: string; targetMatch?: boolean };
+type Evidence = { time: string; title: string; observation: string; correction: string; targetMatch?: boolean; identityBasis?: string };
 type PipelineTimings = {
   upload_ms?: number; preprocessing_ms?: number; gemini_upload_ms?: number; gemini_processing_ms?: number; analysis_ms?: number; total_ms?: number;
   original_size_bytes?: number; processed_size_bytes?: number; clip_count?: number;
@@ -370,7 +370,7 @@ export default function Home() {
       anchorSize: anchor ? anchor.size.toFixed(2) : '',
       anchorTime: anchor ? previewTime.toFixed(2) : '',
     });
-    if (!identity || candidate.evidence.some(item => item.targetMatch !== true)) {
+    if (!identity || candidate.evidence.some(item => item.targetMatch !== true || !item.identityBasis?.trim())) {
       throw new Error(`El reporte no coincide con el peleador seleccionado (${requested}).${observed} Vuelve a marcar al atleta en un frame claro antes de reintentar.`);
     }
     return { ...candidate, targetIdentity: identity };
@@ -593,9 +593,9 @@ export default function Home() {
 
   async function analyze() {
     if (!video) return setError('Selecciona un video antes de analizar.');
-    if (!anchor && !gloveColor && !topColor && !fighterNotes.trim()) {
+    if (!anchor) {
       document.getElementById('fighter-identity')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return setError('Antes de analizar, identifica al atleta: marca al peleador sobre el frame o escribe una descripción visual clara.');
+      return setError('Antes de analizar, marca al peleador sobre el frame. Esa referencia visual es obligatoria para no confundirlo con su rival.');
     }
     setBusy(true); setStageFloor(0); setError(''); setReport(null); setFrames({});
     try {
@@ -743,8 +743,8 @@ function ReportView({report,onJumpMain,frames,mediaSrc,sourceNeedsFrames}:{repor
     <section className="printDiagrams" data-testid="printable-diagrams"><div className="lessonHead"><span className="eyebrow">DIAGRAMAS DEL COACH · INCLUIDOS EN PDF</span><h3>Tres referencias visuales para llevar al entrenamiento</h3></div><div className="diagramGrid"><TechniqueDiagram kind="entry" title="1 · Entrada con base"/><TechniqueDiagram kind="guard" title="2 · Recupera guardia"/><TechniqueDiagram kind="pivot" title="3 · Sal por ángulo"/></div></section>
     <section className="lessonSection"><div className="lessonHead"><span className="eyebrow">VIDEOS DE CORRECCIÓN</span><h3>{footworkIssue?'Footwork, pivote y salidas':'Fundamentos aplicables a tu prioridad principal'}</h3></div><div className="lessonGrid"><article><iframe src="https://www.youtube.com/embed/-OK0kpv58Rk" title="Cómo mejorar footwork de boxeo" allowFullScreen/><b>Footwork: cómo corregirlo</b><span>Tony Jeffries · usa este video para comparar base, desplazamiento y pies demasiado abiertos.</span></article><article><iframe src="https://www.youtube.com/embed/hNclexRmDsY" title="Cómo pivotar en boxeo" allowFullScreen/><b>Pivote y salida por ángulo</b><span>Tony Jeffries · referencia visual para no quedar frente al rival después de atacar.</span></article></div></section>
     <h3 className="evidenceTitle" id="evidence">EVIDENCIA REPRODUCIBLE <span>{report.evidence.length} momentos</span></h3>
-    {mediaSrc && selectedEvidence && <section className="evidenceViewer" data-testid="evidence-viewer"><div className="evidencePlayer">{sourceNeedsFrames ? (frames[selectedEvidence.time] ? <img data-testid="evidence-compatible-frame" src={frames[selectedEvidence.time]} alt={`Captura real del video en ${selectedEvidence.time}`}/> : <div className="evidenceFrameLoading">PREPARANDO<br/>CAPTURA REAL</div>) : <video key={mediaSrc} data-testid="evidence-video" ref={evidenceVideoRef} src={mediaSrc} controls muted playsInline preload="auto" poster={frames[selectedEvidence.time] || undefined}/>}</div><div><span className="eyebrow">MOMENTO SELECCIONADO · {selectedEvidence.time}</span><h3>{selectedEvidence.title}</h3><p>{sourceNeedsFrames && <span className="evidenceCompatibilityNote">Tu navegador no puede reproducir este códec; mostramos una captura JPEG real del mismo momento. </span>}{selectedEvidence.observation}</p><small><strong>CORRECCIÓN</strong>{selectedEvidence.correction}</small>{!sourceNeedsFrames && <button data-testid="replay-selected" onClick={()=>playEvidence(selectedEvidence)}>▶ REPRODUCIR DESDE {selectedEvidence.time}</button>}</div></section>}
-    <div className="evidence">{report.evidence.length?report.evidence.map((e,i)=><button data-testid="evidence-item" key={`${i}-${e.time}`} className={selectedEvidence?.time===e.time?'selected':''} onClick={()=>playEvidence(e)}>{frames[e.time]?<img src={frames[e.time]} alt={`Captura del sparring en ${e.time}`}/>:<div className="framePlaceholder">CAPTURA<br/>PREPARANDO</div>}<time>{e.time}</time><div><b>{e.title}</b><span>{e.observation}</span><small><strong>CORRECCIÓN</strong>{e.correction}</small></div><em>▶</em></button>):<div className="noEvidence">Este reporte no devolvió timestamps verificables. Fight AI no inventa evidencia.</div>}</div>
+    {mediaSrc && selectedEvidence && <section className="evidenceViewer" data-testid="evidence-viewer"><div className="evidencePlayer">{sourceNeedsFrames ? (frames[selectedEvidence.time] ? <img data-testid="evidence-compatible-frame" src={frames[selectedEvidence.time]} alt={`Captura real del video en ${selectedEvidence.time}`}/> : <div className="evidenceFrameLoading">PREPARANDO<br/>CAPTURA REAL</div>) : <video key={mediaSrc} data-testid="evidence-video" ref={evidenceVideoRef} src={mediaSrc} controls muted playsInline preload="auto" poster={frames[selectedEvidence.time] || undefined}/>}</div><div><span className="eyebrow">MOMENTO SELECCIONADO · {selectedEvidence.time}</span><h3>{selectedEvidence.title}</h3><p>{sourceNeedsFrames && <span className="evidenceCompatibilityNote">Tu navegador no puede reproducir este códec; mostramos una captura JPEG real del mismo momento. </span>}{selectedEvidence.observation}</p>{selectedEvidence.identityBasis && <small><strong>IDENTIDAD VERIFICADA</strong>{selectedEvidence.identityBasis}</small>}<small><strong>CORRECCIÓN</strong>{selectedEvidence.correction}</small>{!sourceNeedsFrames && <button data-testid="replay-selected" onClick={()=>playEvidence(selectedEvidence)}>▶ REPRODUCIR DESDE {selectedEvidence.time}</button>}</div></section>}
+    <div className="evidence">{report.evidence.length?report.evidence.map((e,i)=><button data-testid="evidence-item" key={`${i}-${e.time}`} className={selectedEvidence?.time===e.time?'selected':''} onClick={()=>playEvidence(e)}>{frames[e.time]?<img src={frames[e.time]} alt={`Captura del sparring en ${e.time}`}/>:<div className="framePlaceholder">CAPTURA<br/>PREPARANDO</div>}<time>{e.time}</time><div><b>{e.title}</b><span>{e.observation}</span>{e.identityBasis && <small><strong>IDENTIDAD</strong>{e.identityBasis}</small>}<small><strong>CORRECCIÓN</strong>{e.correction}</small></div><em>▶</em></button>):<div className="noEvidence">Este reporte no devolvió timestamps verificables. Fight AI no inventa evidencia.</div>}</div>
   </div>;
 }
 
