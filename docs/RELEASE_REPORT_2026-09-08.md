@@ -33,11 +33,12 @@ The hybrid engine now includes the versioned catalog `2026.09.07-v1` with eight 
 
 ## Branding and launcher
 
-- Website header: branded gold/black glove-and-reticle `FIGHT AI` logo.
-- Desktop: `C:\Users\JP\Desktop\Fight AI Beta.lnk` with branded icon and name.
+- Website header: branded gold/black glove-and-reticle `FIGHT AI` logo, enlarged to 72 px on desktop and 56 px on mobile with increased header spacing and wordmark legibility.
+- Desktop: `C:\Users\JP\Desktop\Fight AI Beta.lnk` with branded icon and name. The shortcut now points to a versioned standards-compatible PNG-backed ICO instead of a temporary Windows icon handle, and Explorer is refreshed after installation.
 - Daily launcher: `ABRIR_FIGHT_AI.cmd`.
 - PC URL: `http://localhost:8787`.
 - LAN URL used for phone testing: `http://192.168.4.81:8787` (the PC and phone must be on the same network; the LAN IP can change after reconnecting).
+- External supervised beta: run `COMPARTIR_FIGHT_AI.cmd` to create a temporary authenticated HTTPS Cloudflare Tunnel without opening router ports. Use `VER_ACCESO_EXTERNO.cmd` to display the current URL and credentials locally. The free proxy path is limited to videos below 100 MB.
 
 ## Verification gate
 

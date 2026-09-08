@@ -62,21 +62,42 @@ function New-FightAiIcon([string]$Path) {
 
 $IconDirectory = Join-Path $env:LOCALAPPDATA 'FightAI'
 New-Item -ItemType Directory -Path $IconDirectory -Force | Out-Null
-$IconPath = Join-Path $IconDirectory 'FightAI-Beta.ico'
+$IconPath = Join-Path $IconDirectory 'FightAI-Beta-v2.ico'
 try {
   $SourceIcon = Join-Path $Root 'assets\desktop\fight-ai-icon.png'
   if (Test-Path $SourceIcon) {
     Add-Type -AssemblyName System.Drawing
     $sourceBitmap = [System.Drawing.Bitmap]::FromFile($SourceIcon)
     try {
-      $resized = New-Object System.Drawing.Bitmap 256,256
+      $resized = New-Object System.Drawing.Bitmap 256,256,([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
       $canvas = [System.Drawing.Graphics]::FromImage($resized)
       try {
+        $canvas.Clear([System.Drawing.Color]::Transparent)
+        $canvas.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+        $canvas.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $canvas.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
         $canvas.DrawImage($sourceBitmap, 0, 0, 256, 256)
-        $handle = $resized.GetHicon()
-        $icon = [System.Drawing.Icon]::FromHandle($handle)
-        $stream = [System.IO.File]::Open($IconPath, [System.IO.FileMode]::Create)
-        try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose() }
+        $pngStream = New-Object System.IO.MemoryStream
+        try {
+          $resized.Save($pngStream, [System.Drawing.Imaging.ImageFormat]::Png)
+          $pngBytes = $pngStream.ToArray()
+          $stream = [System.IO.File]::Open($IconPath, [System.IO.FileMode]::Create)
+          $writer = New-Object System.IO.BinaryWriter($stream)
+          try {
+            $writer.Write([UInt16]0)
+            $writer.Write([UInt16]1)
+            $writer.Write([UInt16]1)
+            $writer.Write([byte]0)
+            $writer.Write([byte]0)
+            $writer.Write([byte]0)
+            $writer.Write([byte]0)
+            $writer.Write([UInt16]1)
+            $writer.Write([UInt16]32)
+            $writer.Write([UInt32]$pngBytes.Length)
+            $writer.Write([UInt32]22)
+            $writer.Write($pngBytes)
+          } finally { $writer.Dispose() }
+        } finally { $pngStream.Dispose() }
       } finally { $canvas.Dispose(); $resized.Dispose() }
     } finally { $sourceBitmap.Dispose() }
   } else {
@@ -96,6 +117,10 @@ $Shortcut.Description = 'Abre Fight AI Web en este PC y reutiliza el servidor si
 $Shortcut.WindowStyle = 1
 $Shortcut.IconLocation = if ($IconPath -like '*.ico') { "$IconPath,0" } else { "$IconPath,220" }
 $Shortcut.Save()
+
+# Refresh Explorer after switching to the versioned icon path.
+$refresh = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'
+if (Test-Path $refresh) { Start-Process -FilePath $refresh -ArgumentList '-show' -WindowStyle Hidden -Wait }
 
 Write-Host ''
 Write-Host 'Acceso directo creado correctamente:' -ForegroundColor Green
