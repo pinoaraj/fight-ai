@@ -53,3 +53,11 @@ The hybrid engine now includes the versioned catalog `2026.09.07-v1` with eight 
 ## Graphify continuity
 
 `docs/GRAPIFY_BETA_SPEC.md` is the maintained graph-ready product/architecture source and now includes the strict target-identity contract and boxing-program catalog. Local Graphify extraction is not claimed as generated because the installed CLI requires a supported provider key (`MOONSHOT_API_KEY` or `ANTHROPIC_API_KEY`) that is not configured; the Markdown source remains complete for Graphify, OpenCode, Google AI Studio, Claude or another coding agent.
+
+## Fighter attribution regression — second gate
+
+A later human review found that a 00:26 finding still described the black-glove opponent at the ropes while labeling the red-glove athlete. The prior gate was therefore insufficient because the coaching model was effectively validating its own first interpretation.
+
+The local analysis path now performs a second, image-only verification pass after the initial video analysis. It extracts the exact frame for every proposed timestamp, sends those frames together with the marked full-frame reference and tight athlete crop, and requires a new report. The verifier must state who is at the ropes, advancing or striking; it rewrites swapped-subject claims or removes them, then rebuilds the summary and coaching plan from only the corrected evidence. A report with no independently verified athlete evidence is blocked.
+
+The exact round regression completed in 146.9 seconds. The invalid 00:26 evidence was removed. The final timestamps were 00:18, 01:05, 01:41 and 02:29, and a direct contact-sheet review confirmed that all four descriptions refer to the white-headgear/red-Fairtex-glove athlete. This supersedes the earlier single-pass identity result in this report.

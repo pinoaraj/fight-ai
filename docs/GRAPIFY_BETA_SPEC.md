@@ -267,6 +267,15 @@ The active local beta requires a fighter marker before analysis. From that marke
 
 The exact `20260827_204921.mp4` regression completed in 141.4 seconds. At 01:28 it identified the selected athlete by white Ringside headgear and red Fairtex gloves and described his body work, correcting the prior black-glove-opponent attribution. This dual-reference path currently applies to the local PC/LAN and authenticated Cloudflare-tunnel beta; equivalent reference-image transport must be added before claiming parity for the managed S3/DynamoDB/AWS path.
 
+### Independent evidence-frame gate
+
+Human review subsequently caught a different swapped-subject claim at 00:26, proving that self-declared `identityBasis` alone was not sufficient. The active local pipeline now has two distinct inference stages:
+
+1. video coaching proposes timestamped evidence;
+2. an image-only verifier receives the marked reference, tight target crop and exact JPEG for every proposed timestamp, then rewrites or drops subject-swapped evidence and rebuilds the report from verified findings.
+
+The corrected exact-video run took 146.9 seconds and removed the invalid 00:26 finding. Its four retained frames (00:18, 01:05, 01:41, 02:29) were checked directly against the source and all describe the selected white-headgear/red-glove athlete. Empty verification results fail closed and never render a report.
+
 
 ## Checkpoint 2026-09-01 — Gemini Files capacity fallback
 

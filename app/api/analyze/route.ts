@@ -157,6 +157,59 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
   throw new Error(`Gemini rechazó el análisis (${lastStatus}).`);
 }
 
+async function verifyCoachJson(apiKey: string, prompt: string, anchorReferenceUris: string[], evidenceReferenceUris: string[]) {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
+  let lastStatus = 0;
+  for (const model of candidates) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            input: [
+              { type: 'text', text: 'REFERENCIA A: el rectángulo dorado encierra exclusivamente al atleta elegido por el usuario.' },
+              { type: 'image', uri: anchorReferenceUris[0], mime_type: 'image/jpeg' },
+              { type: 'text', text: 'REFERENCIA B: recorte cercano del mismo atleta elegido.' },
+              { type: 'image', uri: anchorReferenceUris[1], mime_type: 'image/jpeg' },
+              ...evidenceReferenceUris.flatMap((uri, index) => [
+                { type: 'text', text: `EVIDENCIA ${index + 1}: frame exacto del timestamp correspondiente en el borrador.` },
+                { type: 'image', uri, mime_type: 'image/jpeg' },
+              ]),
+              { type: 'text', text: prompt },
+            ],
+            response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
+            store: false,
+          }), cache: 'no-store', signal: AbortSignal.timeout(3 * 60 * 1000),
+        });
+      } catch {
+        lastStatus = 0;
+        if (attempt === 0) { await sleep(3000); continue; }
+        break;
+      }
+      lastStatus = response.status;
+      const body = await response.text();
+      if (response.ok) {
+        const text = interactionOutputText(JSON.parse(body) as unknown);
+        if (!text) throw new Error('El verificador visual no devolvió contenido.');
+        return cleanGeminiJson(text);
+      }
+      if ([429,500,502,503,504].includes(response.status) && attempt === 0) { await sleep(4000); continue; }
+      break;
+    }
+  }
+  throw new Error(`No pudimos verificar visualmente cada evidencia (${lastStatus || 'sin respuesta'}). El reporte fue bloqueado para evitar analizar al rival.`);
+}
+
+function clockToSeconds(value: unknown) {
+  if (typeof value !== 'string') return Number.NaN;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return Number.NaN;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
 function field(source: FormData, key: string, fallback = '') { return String(source.get(key) || fallback).trim(); }
 
 function targetContext(source: FormData): TargetIdentityContext {
@@ -295,6 +348,7 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
   const clipPath = join(tmpdir(), `fight-ai-local-round-${randomUUID()}.mp4`);
   const markedReferencePath = join(tmpdir(), `fight-ai-anchor-marked-${randomUUID()}.jpg`);
   const croppedReferencePath = join(tmpdir(), `fight-ai-anchor-crop-${randomUUID()}.jpg`);
+  const evidenceReferencePaths: string[] = [];
   const videoName = hasStagedVideo ? field(source, 'video_name', 'fight-ai-sparring.mp4') : (video as File).name || 'fight-ai-sparring.mp4';
   let originalSize = hasStagedVideo ? Number(field(source, 'video_size', '0')) || 0 : (video as File).size;
   let preprocessingMs = 0;
@@ -474,23 +528,56 @@ Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, pri
     await updateStatus?.('coaching');
     const analysisStarted = Date.now();
     const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType, anchorReferenceUris);
+    const draftEvidence = Array.isArray(parsed.evidence)
+      ? parsed.evidence.map(parseIdentityEvidence).filter((item): item is NonNullable<typeof item> => Boolean(item)).slice(0, 5)
+      : [];
+    if (!draftEvidence.length) throw new Error('Gemini no encontró evidencia verificable del peleador seleccionado.');
+
+    await updateStatus?.('verifying');
+    for (const item of draftEvidence) {
+      const seconds = clockToSeconds(item.time);
+      if (!Number.isFinite(seconds) || seconds < 0 || seconds > 180) continue;
+      const path = join(tmpdir(), `fight-ai-evidence-verify-${randomUUID()}.jpg`);
+      await makeAnchorReferenceImage(inputPath, path, seconds, 'scale=-2:720');
+      evidenceReferencePaths.push(path);
+    }
+    if (evidenceReferencePaths.length !== draftEvidence.length) throw new Error('No pudimos generar todos los frames de verificación del reporte.');
+    const evidenceReferenceUris = await Promise.all(evidenceReferencePaths.map((path, index) =>
+      uploadAnchorReference(apiKey, path, `fight-ai-evidence-${index + 1}-${videoName}`.slice(0, 160))));
+    const verificationPrompt = `Eres el verificador visual final de Fight AI. No confíes en las etiquetas de identidad del borrador: comprueba cada afirmación mirando las imágenes.
+
+Las dos primeras imágenes definen al atleta objetivo. Las imágenes EVIDENCIA 1..N corresponden, en el mismo orden, a estos elementos del borrador:
+${JSON.stringify(draftEvidence)}
+
+Borrador completo:
+${JSON.stringify(parsed)}
+
+Reglas obligatorias:
+1. Distingue explícitamente quién está en las cuerdas, quién avanza y quién golpea en cada imagen.
+2. Nunca atribuyas al atleta objetivo la postura o acción del rival. Los guantes, casco, ropa y continuidad con las referencias mandan sobre el texto del borrador.
+3. Si un elemento intercambia los sujetos, reescribe title, observation y correction para describir únicamente lo que hace o recibe el atleta objetivo en ese frame. Si el objetivo no es visible con certeza, omite el elemento.
+4. Cada evidence devuelto debe conservar su timestamp, tener targetMatch=true e identityBasis debe citar rasgos realmente visibles del objetivo y su posición/acción en ese frame.
+5. Reescribe summary, strengths, priorities, opponent, plan y drills para que sean coherentes exclusivamente con las evidencias corregidas. No mantengas conclusiones contaminadas por el rival.
+6. Devuelve exclusivamente JSON válido con el mismo esquema del borrador.`;
+    const verified = await verifyCoachJson(apiKey, verificationPrompt, anchorReferenceUris, evidenceReferenceUris);
     const analysisMs = Date.now() - analysisStarted;
-    const targetIdentity = parseTargetIdentity(parsed.targetIdentity, targetContext(source));
+    const targetIdentity = parseTargetIdentity(verified.targetIdentity, targetContext(source));
     if (!targetIdentity) throw new Error('No pudimos confirmar que el análisis siguiera al peleador seleccionado. Ajusta el círculo o agrega rasgos visibles y reintenta.');
     const stringList = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
-    const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.map(parseIdentityEvidence).filter((item): item is NonNullable<typeof item> => Boolean(item)) : [];
+    const evidence = Array.isArray(verified.evidence) ? verified.evidence.map(parseIdentityEvidence).filter((item): item is NonNullable<typeof item> => Boolean(item)) : [];
+    if (!evidence.length) throw new Error('El verificador no pudo confirmar ninguna evidencia del peleador seleccionado. El reporte fue bloqueado.');
 
     return {
       mode: 'real' as const,
       provider: 'Gemini',
       usedInReport: true,
       targetIdentity,
-      summary: typeof parsed.summary === 'string' ? parsed.summary : 'Análisis completado con Gemini.',
-      strengths: stringList(parsed.strengths),
-      priorities: stringList(parsed.priorities).slice(0,3),
-      opponent: stringList(parsed.opponent),
-      plan: stringList(parsed.plan),
-      drills: stringList(parsed.drills),
+      summary: typeof verified.summary === 'string' ? verified.summary : 'Análisis completado y verificado visualmente con Gemini.',
+      strengths: stringList(verified.strengths),
+      priorities: stringList(verified.priorities).slice(0,3),
+      opponent: stringList(verified.opponent),
+      plan: stringList(verified.plan),
+      drills: stringList(verified.drills),
       evidence,
       timings: {
         preprocessing_ms: preprocessingMs,
@@ -513,6 +600,7 @@ Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, pri
       unlink(clipPath).catch(() => undefined),
       unlink(markedReferencePath).catch(() => undefined),
       unlink(croppedReferencePath).catch(() => undefined),
+      ...evidenceReferencePaths.map(path => unlink(path).catch(() => undefined)),
     ]);
   }
 }
@@ -520,7 +608,7 @@ Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, pri
 
 type LocalJob = {
   id: string;
-  status: 'queued' | 'preprocessing' | 'uploading' | 'preparing' | 'coaching' | 'complete' | 'failed';
+  status: 'queued' | 'preprocessing' | 'uploading' | 'preparing' | 'coaching' | 'verifying' | 'complete' | 'failed';
   updatedAt: number;
   report?: unknown;
   error?: string;
@@ -579,7 +667,7 @@ async function runLocalJob(id: string, source: FormData) {
   try {
     await update('preprocessing');
     const report = await analyzeWithGemini(source, async (status) => {
-      if (['preprocessing','uploading','preparing','coaching'].includes(status)) {
+      if (['preprocessing','uploading','preparing','coaching','verifying'].includes(status)) {
         await update(status as LocalJob['status']);
       }
     });

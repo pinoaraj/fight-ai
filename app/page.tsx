@@ -60,6 +60,7 @@ const processingSteps = [
   { title: 'Preparando la referencia en Gemini', detail: 'Ya enviamos el round compacto; Gemini confirma el video antes de revisarlo.', typical: 'Suele tomar 30–90 s' },
   { title: 'Leyendo patrones técnicos', detail: 'El coach revisa distancia, defensa, base, salidas y decisiones repetidas.', typical: 'En curso' },
   { title: 'Analizando rival y estrategia', detail: 'Estamos conectando los momentos visibles con correcciones concretas.', typical: 'En curso' },
+  { title: 'Verificando al peleador en cada evidencia', detail: 'Comparamos cada timestamp con el atleta que marcaste y descartamos cualquier acción del rival.', typical: 'Control final de identidad' },
   { title: 'Construyendo tu reporte', detail: 'Ordenamos prioridades, drills, evidencia y las capturas para PDF.', typical: 'Último paso' },
 ];
 
@@ -429,6 +430,7 @@ export default function Home() {
       if (data?.status === 'preprocessing') setStageFloor(1);
       else if (data?.status === 'uploading' || data?.status === 'preparing') setStageFloor(2);
       else if (data?.status === 'coaching') setStageFloor(4);
+      else if (data?.status === 'verifying') setStageFloor(5);
       else setStageFloor(1);
     }
     throw new Error('El análisis superó 25 minutos. El servidor local dejó el job registrado para diagnóstico.');
