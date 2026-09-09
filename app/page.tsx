@@ -432,6 +432,11 @@ export default function Home() {
       else if (data?.status === 'coaching') setStageFloor(4);
       else if (data?.status === 'verifying') setStageFloor(5);
       else setStageFloor(1);
+
+      const jobAgeMs = typeof data?.updatedAt === 'number' ? Date.now() - data.updatedAt : 0;
+      if (data?.status === 'verifying' && jobAgeMs > 4 * 60 * 1000) {
+        throw new Error('La verificación visual dejó de avanzar. El video preparado sigue en este PC: pulsa ANALIZAR SPARRING para recuperarlo sin volver a subirlo.');
+      }
     }
     throw new Error('El análisis superó 25 minutos. El servidor local dejó el job registrado para diagnóstico.');
   }

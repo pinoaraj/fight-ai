@@ -7,7 +7,7 @@ Web client for the Fight AI combat-sparring analysis platform.
 Canonical and active local-server branch: `web/mvp`
 PR #2 remains the historical controlled-cloud beta baseline.
 
-Latest operational verification (2026-09-08): the exact 274.6 MB HEVC regression video completed locally in 137 seconds. The fighter marked on the right was confirmed as the red/white-gloves athlete at 98% identity confidence; the report explicitly distinguished the black-gloves opponent, rendered five real JPEG evidence moments, and enabled print/PDF export. The branded `FIGHT AI` website logo and desktop shortcut are installed. TypeScript, production build, and the desktop/mobile Playwright virtual-agent gate pass (16 passed, 2 device-specific skips).
+Latest operational verification (2026-09-09): the exact 274.6 MB HEVC regression video completed locally in 146.9 seconds with a second, image-only identity gate. Human review caught and the gate removed a swapped-subject finding at 00:26; the four retained timestamps describe the marked red/white-gloves athlete. Local jobs persist their staged-video context and resume after server restarts, legacy orphan jobs fail explicitly, and both coaching stages have global time budgets. The branded `FIGHT AI` website logo and desktop shortcut are installed. TypeScript, production build, and the desktop/mobile Playwright virtual-agent gate pass (18 passed, 2 device-specific skips).
 
 The web beta is cleared for controlled beta testing. Latest validated baseline:
 - Web MVP CI #432/#433: PASS on the final documented HEAD;

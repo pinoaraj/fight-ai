@@ -77,7 +77,7 @@ Controlled beta is approved; broad public launch is not. Continue real-device HE
 - Reports and each evidence item now carry a strict target-identity contract. Conflicts, uncertain marked anchors, glove mismatch, or confidence below 0.60 are rejected instead of showing analysis for the wrong fighter.
 - The hybrid catalog is versioned as `2026.09.07-v1`; see `docs/BOXING_PROGRAM_CATALOG.md`.
 - The site header and `Fight AI Beta.lnk` use the branded `FIGHT AI` glove/reticle logo.
-- Final local gate: TypeScript PASS, production build PASS, Playwright desktop/mobile virtual agents 16 passed and 2 device-specific skips.
+- Current local gate (2026-09-09): TypeScript PASS, production build PASS, Playwright desktop/mobile virtual agents 18 passed and 2 device-specific skips. New local jobs persist staged-video context for restart recovery; legacy orphan jobs fail explicitly, and the browser stops a stale visual-verification phase after four minutes.
 
 
 ## Continuity checkpoint — 2026-09-01

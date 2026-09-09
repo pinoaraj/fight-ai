@@ -110,13 +110,14 @@ function interactionOutputText(raw: unknown) {
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, anchorReferenceUris: string[] = []) {
   const configured = process.env.GEMINI_MODEL?.trim();
   const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
-  let lastStatus = 0; let retryAfter = 0;
+  const deadline = Date.now() + 180_000;
+  let lastStatus = 0;
   for (const model of candidates) {
-    const maxAttempts = 2;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      let response: Response;
-      try {
-        response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    const remaining = deadline - Date.now();
+    if (remaining < 5_000) break;
+    let response: Response;
+    try {
+      response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
           method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model,
@@ -131,25 +132,20 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
             response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
             store: false,
           }), cache: 'no-store',
-          signal: AbortSignal.timeout(4 * 60 * 1000),
-        });
-      } catch {
-        lastStatus = 0;
-        if (attempt + 1 < maxAttempts) { await sleep(5000); continue; }
-        break;
-      }
-      lastStatus = response.status; retryAfter = Number(response.headers.get('retry-after') || 0); const body = await response.text();
-      if (response.ok) {
-        const text = interactionOutputText(JSON.parse(body) as unknown);
-        if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
-        return cleanGeminiJson(text);
-      }
-      if ([429,500,502,503,504].includes(response.status) && attempt + 1 < maxAttempts) {
-        await sleep(Math.max(retryAfter * 1000, 5000 * (attempt + 1)));
-        continue;
-      }
-      break;
+          signal: AbortSignal.timeout(Math.min(90_000, remaining)),
+      });
+    } catch {
+      lastStatus = 0;
+      continue;
     }
+    lastStatus = response.status;
+    const body = await response.text();
+    if (response.ok) {
+      const text = interactionOutputText(JSON.parse(body) as unknown);
+      if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
+      return cleanGeminiJson(text);
+    }
+    if (![429,500,502,503,504].includes(response.status)) break;
   }
   if ([0,429,500,502,503,504].includes(lastStatus)) {
     throw new Error('Gemini está temporalmente ocupado. El video sigue seguro; vuelve a intentar el análisis en un momento.');
@@ -160,12 +156,14 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
 async function verifyCoachJson(apiKey: string, prompt: string, anchorReferenceUris: string[], evidenceReferenceUris: string[]) {
   const configured = process.env.GEMINI_MODEL?.trim();
   const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
+  const deadline = Date.now() + 135_000;
   let lastStatus = 0;
   for (const model of candidates) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let response: Response;
-      try {
-        response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    const remaining = deadline - Date.now();
+    if (remaining < 5_000) break;
+    let response: Response;
+    try {
+      response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
           method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model,
@@ -182,23 +180,20 @@ async function verifyCoachJson(apiKey: string, prompt: string, anchorReferenceUr
             ],
             response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
             store: false,
-          }), cache: 'no-store', signal: AbortSignal.timeout(3 * 60 * 1000),
-        });
-      } catch {
-        lastStatus = 0;
-        if (attempt === 0) { await sleep(3000); continue; }
-        break;
-      }
-      lastStatus = response.status;
-      const body = await response.text();
-      if (response.ok) {
-        const text = interactionOutputText(JSON.parse(body) as unknown);
-        if (!text) throw new Error('El verificador visual no devolvió contenido.');
-        return cleanGeminiJson(text);
-      }
-      if ([429,500,502,503,504].includes(response.status) && attempt === 0) { await sleep(4000); continue; }
-      break;
+          }), cache: 'no-store', signal: AbortSignal.timeout(Math.min(65_000, remaining)),
+      });
+    } catch {
+      lastStatus = 0;
+      continue;
     }
+    lastStatus = response.status;
+    const body = await response.text();
+    if (response.ok) {
+      const text = interactionOutputText(JSON.parse(body) as unknown);
+      if (!text) throw new Error('El verificador visual no devolvió contenido.');
+      return cleanGeminiJson(text);
+    }
+    if (![429,500,502,503,504].includes(response.status)) break;
   }
   throw new Error(`No pudimos verificar visualmente cada evidencia (${lastStatus || 'sin respuesta'}). El reporte fue bloqueado para evitar analizar al rival.`);
 }
@@ -612,7 +607,11 @@ type LocalJob = {
   updatedAt: number;
   report?: unknown;
   error?: string;
+  source?: Record<string, string>;
 };
+
+const localProcessStartedAt = Date.now();
+const resumingLocalJobs = new Set<string>();
 
 function localJobPath(id: string) {
   return join(tmpdir(), `fight-ai-local-job-${id}.json`);
@@ -629,6 +628,18 @@ async function readLocalJob(id: string): Promise<LocalJob | null> {
   } catch {
     return null;
   }
+}
+
+function localSourceRecord(source: FormData) {
+  const record: Record<string, string> = {};
+  for (const [key, value] of source.entries()) if (typeof value === 'string') record[key] = value;
+  return record;
+}
+
+function localSourceForm(record: Record<string, string>) {
+  const source = new FormData();
+  for (const [key, value] of Object.entries(record)) source.append(key, value);
+  return source;
 }
 
 async function prepareLocalAsyncSource(source: FormData) {
@@ -661,8 +672,9 @@ async function prepareLocalAsyncSource(source: FormData) {
 }
 
 async function runLocalJob(id: string, source: FormData) {
+  const sourceRecord = localSourceRecord(source);
   const update = async (status: LocalJob['status']) => {
-    await writeLocalJob({ id, status, updatedAt: Date.now() });
+    await writeLocalJob({ id, status, updatedAt: Date.now(), source: sourceRecord });
   };
   try {
     await update('preprocessing');
@@ -671,7 +683,7 @@ async function runLocalJob(id: string, source: FormData) {
         await update(status as LocalJob['status']);
       }
     });
-    await writeLocalJob({ id, status: 'complete', updatedAt: Date.now(), report });
+    await writeLocalJob({ id, status: 'complete', updatedAt: Date.now(), report, source: sourceRecord });
   } catch (error) {
     console.error('Fight AI local async analysis error', error);
     await writeLocalJob({
@@ -679,14 +691,31 @@ async function runLocalJob(id: string, source: FormData) {
       status: 'failed',
       updatedAt: Date.now(),
       error: error instanceof Error ? error.message : 'No se pudo completar el análisis.',
+      source: sourceRecord,
     });
   }
 }
 
 export async function GET(req: NextRequest) {
   const id = new URL(req.url).searchParams.get('id') || '';
-  const job = await readLocalJob(id);
+  let job = await readLocalJob(id);
   if (!job) return NextResponse.json({ error: 'El trabajo local no existe o ya expiró.' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  const active = ['queued','preprocessing','uploading','preparing','coaching','verifying'].includes(job.status);
+  if (active && job.updatedAt < localProcessStartedAt - 1_000) {
+    if (job.source && !resumingLocalJobs.has(id)) {
+      resumingLocalJobs.add(id);
+      void runLocalJob(id, localSourceForm(job.source)).finally(() => resumingLocalJobs.delete(id));
+      job = { ...job, status: 'queued', updatedAt: Date.now() };
+    } else if (!job.source) {
+      job = {
+        ...job,
+        status: 'failed',
+        updatedAt: Date.now(),
+        error: 'El servidor se reinició durante este análisis antiguo. Pulsa ANALIZAR SPARRING otra vez: el video preparado sigue en este PC y no volverá a cargarse.',
+      };
+      await writeLocalJob(job);
+    }
+  }
   if (job.status === 'complete') return NextResponse.json({ status: job.status, report: job.report, updatedAt: job.updatedAt }, { headers: { 'Cache-Control': 'no-store' } });
   if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error, updatedAt: job.updatedAt }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
   return NextResponse.json({ status: job.status, updatedAt: job.updatedAt }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
@@ -701,7 +730,7 @@ export async function POST(req: NextRequest) {
     if (localMode && new URL(req.url).searchParams.get('async') === '1') {
       const prepared = await prepareLocalAsyncSource(source);
       const id = randomUUID();
-      await writeLocalJob({ id, status: 'queued', updatedAt: Date.now() });
+      await writeLocalJob({ id, status: 'queued', updatedAt: Date.now(), source: localSourceRecord(prepared) });
       void runLocalJob(id, prepared);
       return NextResponse.json({ id, status: 'queued' }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
     }

@@ -47,7 +47,7 @@ The hybrid engine now includes the versioned catalog `2026.09.07-v1` with eight 
 
 - TypeScript: PASS.
 - Next.js production build: PASS.
-- Playwright desktop/mobile virtual agents: 16 passed, 2 device-specific skips.
+- Playwright desktop/mobile virtual agents: 18 passed, 2 device-specific skips, including a stale-verification regression that proves the browser exits instead of polling indefinitely.
 - Real HEVC upload, mandatory frame marking, dual visual identity references, red-fighter identity, 01:28 attribution, report generation and JPEG evidence: PASS.
 
 ## Graphify continuity
@@ -61,3 +61,7 @@ A later human review found that a 00:26 finding still described the black-glove 
 The local analysis path now performs a second, image-only verification pass after the initial video analysis. It extracts the exact frame for every proposed timestamp, sends those frames together with the marked full-frame reference and tight athlete crop, and requires a new report. The verifier must state who is at the ropes, advancing or striking; it rewrites swapped-subject claims or removes them, then rebuilds the summary and coaching plan from only the corrected evidence. A report with no independently verified athlete evidence is blocked.
 
 The exact round regression completed in 146.9 seconds. The invalid 00:26 evidence was removed. The final timestamps were 00:18, 01:05, 01:41 and 02:29, and a direct contact-sheet review confirmed that all four descriptions refer to the white-headgear/red-Fairtex-glove athlete. This supersedes the earlier single-pass identity result in this report.
+
+## Interrupted-job recovery — 2026-09-09
+
+A user analysis remained at `verifying` for 16 minutes because the local server was restarted while that job was active. The JSON status survived but the in-memory promise did not, so the browser kept polling an orphaned status. Local jobs now persist their complete string context, detect that their timestamp predates the current server process and automatically resume from the already staged MP4 after a restart. Older jobs created before this metadata existed fail explicitly instead of displaying endless processing. The independent verifier also has a 135-second global budget with at most one bounded attempt per fallback model, replacing a nested retry design whose worst case was 18 minutes.

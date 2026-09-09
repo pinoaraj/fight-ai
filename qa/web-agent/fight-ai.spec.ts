@@ -273,6 +273,33 @@ test('a transient durable-job failure retries without uploading the video again'
   await expect(retry).toHaveCount(0);
 });
 
+test('a stale local verification stops instead of polling indefinitely', async ({ page }) => {
+  await page.route('**/api/health', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ localMode: true, geminiConfigured: true, analysisReady: true }),
+  }));
+  await page.route('**/api/preview-frame**', route => {
+    if (route.request().method() === 'DELETE') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ deleted: true }) });
+    return route.fulfill({
+      status: 200,
+      contentType: 'image/jpeg',
+      headers: { 'x-fight-ai-staged-video': 'qa-staged-timeout' },
+      body: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EH//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EH//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EH//2Q==', 'base64'),
+    });
+  });
+  await page.route('**/api/analyze**', route => {
+    if (route.request().method() === 'POST') return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'stale-verify-job', status: 'queued' }) });
+    return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ status: 'verifying', updatedAt: Date.now() - 5 * 60 * 1000 }) });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(realVideo());
+  await markVisibleFighter(page);
+  await page.getByTestId('glove-color').fill('rojos');
+  await page.getByTestId('analyze-button').click();
+  await expect(page.locator('.error[role="alert"]')).toContainText('La verificación visual dejó de avanzar', { timeout: 10_000 });
+  await expect(page.getByTestId('processing-state')).toHaveCount(0);
+});
+
 test('virtual athlete can identify fighter choose coach focus submit analysis and replay uploaded evidence', async ({ page }) => {
   await page.route('**/api/health', route => route.fulfill({
     status: 200,

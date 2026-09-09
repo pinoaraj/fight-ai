@@ -276,6 +276,10 @@ Human review subsequently caught a different swapped-subject claim at 00:26, pro
 
 The corrected exact-video run took 146.9 seconds and removed the invalid 00:26 finding. Its four retained frames (00:18, 01:05, 01:41, 02:29) were checked directly against the source and all describe the selected white-headgear/red-glove athlete. Empty verification results fail closed and never render a report.
 
+### Local restart recovery and bounded verification
+
+Every new local asynchronous job persists the staged-video identifier plus its analysis context in the job record. A GET after a Node/server restart detects active records older than the current process and resumes them from the staged MP4. Legacy records without context transition to an explicit retryable failure instead of polling indefinitely. The image-only verifier has a 135-second global deadline and one bounded attempt per fallback model; it can no longer accumulate an 18-minute nested retry window.
+
 
 ## Checkpoint 2026-09-01 — Gemini Files capacity fallback
 
