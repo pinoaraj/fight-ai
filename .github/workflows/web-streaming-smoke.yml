@@ -1,0 +1,188 @@
+name: Web Streaming Production Smoke
+
+on:
+  # AWS is no longer the default beta runtime. Keep cloud workflows available
+  # only for an explicit manual recovery/test so local-PC work cannot create
+  # accidental ECS/ALB/CloudFront spend.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-streaming-production-smoke
+  cancel-in-progress: true
+
+jobs:
+  streaming-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: web/mvp
+
+      - name: Verify public multipart S3 and durable Gemini analysis
+        run: |
+          set -euo pipefail
+          URL="https://d1ga34t3tjgix2.cloudfront.net"
+
+          READY=0
+          STABLE=0
+          for ATTEMPT in $(seq 1 90); do
+            if curl --fail --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 -sS "$URL/api/health" > /tmp/health.json; then
+              export EXPECTED_SHA="$GITHUB_SHA"
+              if python - <<'PY'
+          import json, os, sys
+          data=json.load(open('/tmp/health.json',encoding='utf-8'))
+          ok = data.get('analysisReady') is True and data.get('geminiConfigured') is True and data.get('buildSha') == os.environ['EXPECTED_SHA']
+          print('Public health:', data)
+          sys.exit(0 if ok else 1)
+          PY
+              then
+                STABLE=$((STABLE + 1))
+                if [ "$STABLE" -ge 3 ]; then
+                  READY=1
+                  break
+                fi
+                sleep 5
+                continue
+              fi
+            fi
+            STABLE=0
+            sleep 10
+          done
+          if [ "$READY" -ne 1 ]; then
+            echo "Public site never reached expected build SHA $GITHUB_SHA" >&2
+            cat /tmp/health.json >&2 || true
+            exit 1
+          fi
+
+          python - <<'PY'
+          import base64, pathlib
+          src=pathlib.Path('qa/gemini-proof-red-gloves-tiny.b64')
+          raw=''.join(src.read_text(encoding='utf-8').split())
+          pathlib.Path('/tmp/fight-ai-durable-smoke.mp4').write_bytes(base64.b64decode(raw, validate=False))
+          PY
+          test -s /tmp/fight-ai-durable-smoke.mp4
+
+          curl --fail --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS             -H 'Content-Type: application/json'             --data '{"action":"start","name":"fight-ai-durable-smoke.mp4","type":"video/mp4"}'             "$URL/api/direct-upload" > /tmp/start.json
+
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/start.json',encoding='utf-8'))
+          assert data.get('key','').startswith('uploads/'), data
+          assert data.get('uploadId'), data
+          open('/tmp/key','w').write(data['key'])
+          open('/tmp/upload_id','w').write(data['uploadId'])
+          PY
+          KEY=$(cat /tmp/key)
+          UPLOAD_ID=$(cat /tmp/upload_id)
+
+          python - <<'PY'
+          import json, urllib.parse
+          key=open('/tmp/key').read()
+          upload_id=open('/tmp/upload_id').read()
+          json.dump({'action':'sign','key':key,'uploadId':upload_id,'partNumber':1},open('/tmp/sign-request.json','w'))
+          PY
+          curl --fail --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS             -H 'Content-Type: application/json'             --data-binary @/tmp/sign-request.json             "$URL/api/direct-upload" > /tmp/sign.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/sign.json',encoding='utf-8'))
+          assert data.get('url'), data
+          open('/tmp/signed_url','w').write(data['url'])
+          PY
+          SIGNED_URL=$(cat /tmp/signed_url)
+
+          curl --fail --max-time 120 --retry 5 --retry-all-errors --retry-delay 2 -sS -D /tmp/part-headers.txt -o /dev/null             -X PUT --data-binary @/tmp/fight-ai-durable-smoke.mp4 "$SIGNED_URL"
+          ETAG=$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {gsub("\r","",$2); print $2}' /tmp/part-headers.txt | tail -1)
+          test -n "$ETAG"
+
+          export KEY UPLOAD_ID ETAG
+          python - <<'PY'
+          import json, os
+          json.dump({
+            'action':'complete',
+            'key':os.environ['KEY'],
+            'uploadId':os.environ['UPLOAD_ID'],
+            'parts':[{'ETag':os.environ['ETAG'],'PartNumber':1}],
+          },open('/tmp/complete.json','w'))
+          PY
+          curl --fail --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS             -H 'Content-Type: application/json'             --data-binary @/tmp/complete.json             "$URL/api/direct-upload" > /tmp/completed.json
+
+          python - <<'PY'
+          import json, os
+          data=json.load(open('/tmp/completed.json',encoding='utf-8'))
+          assert data.get('key') == os.environ['KEY'], data
+          req={
+            's3Key':os.environ['KEY'],
+            'fileName':'fight-ai-durable-smoke.mp4',
+            'mimeType':'video/mp4',
+            'language':'es','sport':'boxing','stance':'orthodox',
+            'glove_color':'red','top_color':'black','relative_height':'shorter','build':'medium',
+            'fighter_notes':'guantes rojos, polera negra, peleador objetivo',
+            'anchor_x':'45.0','anchor_y':'55.0','anchor_size':'24.0','anchor_time':'1.0',
+            'analysis_focus':'technique,weaknesses,strategy,footwork',
+            'custom_focus':'mejorar entradas, salidas y lectura táctica del rival'
+          }
+          json.dump(req,open('/tmp/job-request.json','w',encoding='utf-8'),ensure_ascii=False)
+          PY
+
+          HTTP_CODE=$(curl --max-time 30 --retry 5 --retry-all-errors --retry-delay 2 -sS -o /tmp/job-start.json -w '%{http_code}'             -H 'Content-Type: application/json'             --data-binary @/tmp/job-request.json             "$URL/api/analyze-uploaded?async=1")
+          test "$HTTP_CODE" = "202"
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/job-start.json',encoding='utf-8'))
+          assert data.get('id'), data
+          open('/tmp/job_id','w').write(data['id'])
+          PY
+          JOB_ID=$(cat /tmp/job_id)
+
+          DONE=0
+          for ATTEMPT in $(seq 1 180); do
+            CODE=$(curl --max-time 20 --retry 5 --retry-all-errors --retry-delay 2 -sS -o /tmp/job-status.json -w '%{http_code}' "$URL/api/analyze-uploaded?id=$JOB_ID")
+            if [ "$CODE" = "200" ]; then
+              DONE=1
+              break
+            fi
+            if [ "$CODE" != "202" ]; then
+              echo "Durable Gemini job failed with HTTP $CODE" >&2
+              cat /tmp/job-status.json >&2
+              exit 1
+            fi
+            if [ $((ATTEMPT % 12)) -eq 0 ]; then
+              python - <<'PY'
+          import json
+          try:
+              data=json.load(open('/tmp/job-status.json',encoding='utf-8'))
+              print('Durable smoke status:', data.get('status','unknown'))
+          except Exception:
+              pass
+          PY
+            fi
+            sleep 5
+          done
+          if [ "$DONE" -ne 1 ]; then
+            echo 'Durable Gemini smoke exceeded 15 minutes.' >&2
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          envelope=json.load(open('/tmp/job-status.json',encoding='utf-8'))
+          assert envelope.get('status') == 'complete', envelope
+          data=envelope.get('report') or {}
+          assert data.get('mode') == 'real', data
+          assert data.get('provider') == 'Gemini', data
+          assert data.get('usedInReport') is True, data
+          assert isinstance(data.get('summary'),str) and data['summary'].strip(), data
+          assert isinstance(data.get('priorities'),list) and data['priorities'], data
+          evidence=data.get('evidence')
+          assert isinstance(evidence,list) and evidence, data
+          timings=data.get('timings') or {}
+          print('Durable browser path: VERIFIED')
+          print('Evidence items:', len(evidence))
+          print('Clip count:', timings.get('clip_count'))
+          print('Total ms:', timings.get('total_ms'))
+          print('Gemini ms:', timings.get('gemini_processing_ms'))
+          PY

@@ -1,0 +1,774 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { boxingKnowledgePrompt } from '../../../lib/boxingKnowledge';
+import { identityInstruction, parseIdentityEvidence, parseTargetIdentity, targetIdentitySchema, TargetIdentityContext } from '../../../lib/targetIdentity';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchControl(url: string, init: RequestInit, attempts = 3, timeoutMs = 20_000) {
+  const { signal: _ignoredSignal, ...retryableInit } = init;
+  let lastResponse: Response | undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetch(url, { ...retryableInit, signal: AbortSignal.timeout(timeoutMs) });
+      lastResponse = response;
+      if (response.ok || ![429,500,502,503,504].includes(response.status)) return response;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt + 1 < attempts) await sleep(1500 * (attempt + 1));
+  }
+  if (lastResponse) return lastResponse;
+  throw new Error('No se pudo contactar a Gemini después de varios intentos. Revisa la conexión o DNS y reintenta; el video preparado se conserva.', { cause: lastError });
+}
+
+function secondsToClock(value: number) {
+  const total = Math.max(0, Math.round(value));
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function textOf(item: unknown) {
+  if (!item || typeof item !== 'object') return '';
+  const x = item as Record<string, unknown>;
+  return [typeof x.title === 'string' ? x.title : '', typeof x.description === 'string' ? x.description : ''].filter(Boolean).join(': ');
+}
+
+function normalizeReport(raw: unknown, source: FormData) {
+  const a = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const strengthsRaw = Array.isArray(a.strengths) ? a.strengths : [];
+  const weaknessesRaw = Array.isArray(a.weaknesses) ? a.weaknesses : [];
+  const drillsRaw = Array.isArray(a.drills) ? a.drills : [];
+  const strategy = (a.strategy && typeof a.strategy === 'object' ? a.strategy : {}) as Record<string, unknown>;
+  const opponentAnalysis = (strategy.opponentAnalysis && typeof strategy.opponentAnalysis === 'object' ? strategy.opponentAnalysis : {}) as Record<string, unknown>;
+  const observedOpponent = Array.isArray(opponentAnalysis.observedOpponentPatterns) ? opponentAnalysis.observedOpponentPatterns : [];
+  const hypotheses = Array.isArray(opponentAnalysis.tacticalHypotheses) ? opponentAnalysis.tacticalHypotheses.filter(x => typeof x === 'string') as string[] : [];
+  const rematchPlan = Array.isArray(opponentAnalysis.rematchPlan) ? opponentAnalysis.rematchPlan.filter(x => typeof x === 'string') as string[] : [];
+  const goals = Array.isArray(a.nextSessionGoals) ? a.nextSessionGoals.filter(x => typeof x === 'string') as string[] : [];
+  const realVision = (a.realVision && typeof a.realVision === 'object' ? a.realVision : {}) as Record<string, unknown>;
+  const videoAI = (realVision.videoAI && typeof realVision.videoAI === 'object' ? realVision.videoAI : {}) as Record<string, unknown>;
+  const providerUsed = videoAI.usedInReport === true;
+  const provider = providerUsed && typeof videoAI.provider === 'string' ? videoAI.provider : 'CV / Pose';
+  const targetIdentity = parseTargetIdentity(a.targetIdentity, targetContext(source));
+  const evidence = [...weaknessesRaw, ...strengthsRaw].flatMap(item => {
+    if (!item || typeof item !== 'object') return [];
+    const x = item as Record<string, unknown>;
+    const timestamps = Array.isArray(x.timestamps) ? x.timestamps.filter(v => typeof v === 'number') as number[] : [];
+    return timestamps.map(timestamp => ({
+      time: secondsToClock(timestamp),
+      title: typeof x.title === 'string' ? x.title : 'Evidencia',
+      observation: typeof x.description === 'string' ? x.description : '',
+      correction: typeof x.recommendation === 'string' ? x.recommendation : typeof x.whyItMatters === 'string' ? x.whyItMatters : '',
+      targetMatch: x.targetMatch === true,
+      identityBasis: typeof x.identityBasis === 'string' ? x.identityBasis.trim() : '',
+    }));
+  });
+  return {
+    mode: 'real' as const, provider, usedInReport: providerUsed, targetIdentity,
+    summary: typeof a.mainTakeaway === 'string' ? a.mainTakeaway : typeof strategy.summary === 'string' ? strategy.summary : 'Análisis completado.',
+    strengths: strengthsRaw.map(textOf).filter(Boolean), priorities: weaknessesRaw.map(textOf).filter(Boolean),
+    opponent: [...observedOpponent.map(textOf).filter(Boolean), ...hypotheses], plan: rematchPlan.length ? rematchPlan : goals,
+    drills: drillsRaw.map(item => {
+      if (!item || typeof item !== 'object') return '';
+      const x = item as Record<string, unknown>;
+      return `${typeof x.name === 'string' ? x.name : 'Drill'}${typeof x.duration === 'string' ? ` · ${x.duration}` : ''}${typeof x.goal === 'string' ? ` — ${x.goal}` : ''}`;
+    }).filter(Boolean), evidence,
+  };
+}
+
+async function requestJson(url: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  if (process.env.FIGHT_AI_WEB_TOKEN) headers.set('Authorization', `Bearer ${process.env.FIGHT_AI_WEB_TOKEN}`);
+  const response = await fetch(url, { ...init, headers, cache: 'no-store' });
+  const text = await response.text();
+  let data: unknown;
+  try { data = JSON.parse(text); } catch { throw new Error(`Respuesta inválida del motor (${response.status}).`); }
+  if (!response.ok) throw new Error((data as { error?: string })?.error || text || `HTTP ${response.status}`);
+  return data;
+}
+
+function cleanGeminiJson(text: string) {
+  return JSON.parse(text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '').trim()) as Record<string, unknown>;
+}
+
+const coachingSchema = {
+  type: 'object', properties: {
+    targetIdentity: targetIdentitySchema,
+    summary: { type: 'string' }, strengths: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
+    opponent: { type: 'array', items: { type: 'string' } }, plan: { type: 'array', items: { type: 'string' } }, drills: { type: 'array', items: { type: 'string' } },
+    evidence: { type: 'array', items: { type: 'object', properties: {
+      time: { type: 'string' }, title: { type: 'string' }, observation: { type: 'string' }, correction: { type: 'string' }, targetMatch: { type: 'boolean' }, identityBasis: { type: 'string' },
+    }, required: ['time','title','observation','correction','targetMatch','identityBasis'] } },
+  }, required: ['targetIdentity','summary','strengths','priorities','opponent','plan','drills','evidence'],
+};
+
+function interactionOutputText(raw: unknown) {
+  if (!raw || typeof raw !== 'object') return '';
+  const data = raw as Record<string, unknown>;
+  if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
+  if (!Array.isArray(data.steps)) return '';
+  const chunks: string[] = [];
+  for (const step of data.steps) {
+    if (!step || typeof step !== 'object' || !Array.isArray((step as Record<string, unknown>).content)) continue;
+    for (const item of (step as { content: unknown[] }).content) if (item && typeof item === 'object' && typeof (item as Record<string, unknown>).text === 'string') chunks.push((item as { text: string }).text);
+  }
+  return chunks.join('').trim();
+}
+
+async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, anchorReferenceUris: string[] = []) {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
+  // This three-minute video regularly needs about 140-150 seconds on Gemini.
+  // Keep one useful request alive instead of aborting it at 90 seconds and
+  // spending the remaining budget on a second model that cannot finish.
+  const deadline = Date.now() + 210_000;
+  let lastStatus = 0;
+  for (const model of candidates) {
+    const remaining = deadline - Date.now();
+    if (remaining < 5_000) break;
+    let response: Response;
+    try {
+      response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            input: [
+              ...anchorReferenceUris.flatMap((uri, index) => [
+                { type: 'text', text: index === 0 ? 'REFERENCIA 1: frame completo. El rectángulo dorado identifica al atleta objetivo.' : 'REFERENCIA 2: recorte cercano del mismo atleta objetivo.' },
+                { type: 'image', uri, mime_type: 'image/jpeg' },
+              ]),
+              { type: 'video', uri: fileUri, mime_type: mimeType },
+              { type: 'text', text: prompt },
+            ],
+            response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
+            store: false,
+          }), cache: 'no-store',
+          signal: AbortSignal.timeout(Math.min(200_000, remaining)),
+        });
+    } catch (error) {
+      lastStatus = 0;
+      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+        throw new Error('Gemini superó el límite de 3 minutos y 20 segundos para generar el análisis. El video sigue preparado para reintentar.');
+      }
+      continue;
+    }
+    lastStatus = response.status;
+    const body = await response.text();
+    if (response.ok) {
+      const text = interactionOutputText(JSON.parse(body) as unknown);
+      if (!text) throw new Error('Gemini no devolvió contenido de análisis.');
+      return cleanGeminiJson(text);
+    }
+    if (![429,500,502,503,504].includes(response.status)) break;
+  }
+  if ([0,429,500,502,503,504].includes(lastStatus)) {
+    throw new Error('Gemini está temporalmente ocupado. El video sigue seguro; vuelve a intentar el análisis en un momento.');
+  }
+  throw new Error(`Gemini rechazó el análisis (${lastStatus}).`);
+}
+
+async function verifyCoachJson(apiKey: string, prompt: string, anchorReferenceUris: string[], evidenceReferenceUris: string[]) {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
+  const deadline = Date.now() + 135_000;
+  let lastStatus = 0;
+  for (const model of candidates) {
+    const remaining = deadline - Date.now();
+    if (remaining < 5_000) break;
+    let response: Response;
+    try {
+      response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST', headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            input: [
+              { type: 'text', text: 'REFERENCIA A: el rectángulo dorado encierra exclusivamente al atleta elegido por el usuario.' },
+              { type: 'image', uri: anchorReferenceUris[0], mime_type: 'image/jpeg' },
+              { type: 'text', text: 'REFERENCIA B: recorte cercano del mismo atleta elegido.' },
+              { type: 'image', uri: anchorReferenceUris[1], mime_type: 'image/jpeg' },
+              ...evidenceReferenceUris.flatMap((uri, index) => [
+                { type: 'text', text: `EVIDENCIA ${index + 1}: frame exacto del timestamp correspondiente en el borrador.` },
+                { type: 'image', uri, mime_type: 'image/jpeg' },
+              ]),
+              { type: 'text', text: prompt },
+            ],
+            response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
+            store: false,
+          }), cache: 'no-store', signal: AbortSignal.timeout(Math.min(65_000, remaining)),
+      });
+    } catch {
+      lastStatus = 0;
+      continue;
+    }
+    lastStatus = response.status;
+    const body = await response.text();
+    if (response.ok) {
+      const text = interactionOutputText(JSON.parse(body) as unknown);
+      if (!text) throw new Error('El verificador visual no devolvió contenido.');
+      return cleanGeminiJson(text);
+    }
+    if (![429,500,502,503,504].includes(response.status)) break;
+  }
+  throw new Error(`No pudimos verificar visualmente cada evidencia (${lastStatus || 'sin respuesta'}). El reporte fue bloqueado para evitar analizar al rival.`);
+}
+
+function clockToSeconds(value: unknown) {
+  if (typeof value !== 'string') return Number.NaN;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return Number.NaN;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function field(source: FormData, key: string, fallback = '') { return String(source.get(key) || fallback).trim(); }
+
+function targetContext(source: FormData): TargetIdentityContext {
+  return {
+    gloveColor: field(source, 'glove_color'),
+    topColor: field(source, 'top_color'),
+    fighterNotes: field(source, 'fighter_notes'),
+    anchorX: field(source, 'anchor_x'),
+    anchorY: field(source, 'anchor_y'),
+    anchorSize: field(source, 'anchor_size', '24'),
+    anchorTime: field(source, 'anchor_time', '0'),
+  };
+}
+
+function makeThreeMinuteClip(inputPath: string, outputPath: string) {
+  return new Promise<void>((resolve, reject) => {
+    const encoder = spawn('ffmpeg', [
+      '-hide_banner','-loglevel','error','-y','-i',inputPath,'-t','180',
+      '-map','0:v:0?','-map','0:a?','-c','copy','-movflags','+faststart',outputPath,
+    ], { stdio: ['ignore','ignore','pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('El recorte local tardó demasiado.')); }, 90_000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible en este PC.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo preparar el round local.'));
+    });
+  });
+}
+
+function makeCompactCompatibleClip(inputPath: string, outputPath: string) {
+  return new Promise<void>((resolve, reject) => {
+    const encoder = spawn('ffmpeg', [
+      '-hide_banner','-loglevel','error','-y','-i',inputPath,'-t','180',
+      '-map','0:v:0?','-map','0:a?','-vf','scale=-2:540',
+      '-c:v','libx264','-preset','veryfast','-crf','30','-pix_fmt','yuv420p',
+      '-c:a','aac','-b:a','96k','-movflags','+faststart',outputPath,
+    ], { stdio: ['ignore','ignore','pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('La conversión local tardó demasiado.')); }, 4 * 60_000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no está disponible en este PC.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo convertir el round local.'));
+    });
+  });
+}
+
+function makeAnchorReferenceImage(inputPath: string, outputPath: string, atSeconds: number, filter: string) {
+  return new Promise<void>((resolve, reject) => {
+    const encoder = spawn('ffmpeg', [
+      '-hide_banner','-loglevel','error','-y','-ss',String(Math.max(.1, Math.min(179.5, atSeconds))),
+      '-i',inputPath,'-frames:v','1','-vf',filter,'-q:v','2',outputPath,
+    ], { stdio: ['ignore','ignore','pipe'] });
+    const errors: Buffer[] = [];
+    const timeout = setTimeout(() => { encoder.kill('SIGKILL'); reject(new Error('La referencia visual tardó demasiado.')); }, 45_000);
+    encoder.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    encoder.on('error', () => { clearTimeout(timeout); reject(new Error('FFmpeg no pudo crear la referencia visual.')); });
+    encoder.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) return resolve();
+      reject(new Error(Buffer.concat(errors).toString('utf8').trim() || 'No se pudo crear la referencia visual del atleta.'));
+    });
+  });
+}
+
+async function uploadAnchorReference(apiKey: string, path: string, displayName: string) {
+  const info = await stat(path);
+  const startUpload = await fetchControl('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': apiKey,
+        'X-Goog-Upload-Protocol': 'resumable',
+        'X-Goog-Upload-Command': 'start',
+        'X-Goog-Upload-Header-Content-Length': String(info.size),
+        'X-Goog-Upload-Header-Content-Type': 'image/jpeg',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ file: { display_name: displayName } }),
+      cache: 'no-store',
+  }, 3, 20_000);
+  if (!startUpload.ok) throw new Error(`Gemini no pudo recibir la referencia visual (${startUpload.status}).`);
+  const uploadUrl = startUpload.headers.get('x-goog-upload-url');
+  if (!uploadUrl) throw new Error('Gemini no devolvió URL para la referencia visual.');
+  const uploaded = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'Content-Length': String(info.size), 'X-Goog-Upload-Offset': '0', 'X-Goog-Upload-Command': 'upload, finalize' },
+    body: Readable.toWeb(createReadStream(path) as Readable),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(60_000),
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+  if (!uploaded.ok) throw new Error(`Gemini no pudo cargar la referencia visual (${uploaded.status}).`);
+  const payload = await uploaded.json() as { file?: { name?: string; uri?: string; state?: string } };
+  const name = payload.file?.name;
+  const uri = payload.file?.uri;
+  if (!name || !uri) throw new Error('Gemini no devolvió la referencia visual cargada.');
+  let state = payload.file?.state || 'PROCESSING';
+  const deadline = Date.now() + 90_000;
+  while (state !== 'ACTIVE' && Date.now() < deadline) {
+    if (state === 'FAILED') throw new Error('Gemini rechazó la referencia visual.');
+    await sleep(1000);
+    const status = await fetch(`https://generativelanguage.googleapis.com/v1beta/${name}`, {
+      headers: { 'x-goog-api-key': apiKey }, cache: 'no-store', signal: AbortSignal.timeout(20_000),
+    });
+    if (!status.ok) throw new Error(`No se pudo verificar la referencia visual (${status.status}).`);
+    state = (await status.json() as { state?: string }).state || 'PROCESSING';
+  }
+  if (state !== 'ACTIVE') throw new Error('Gemini tardó demasiado en preparar la referencia visual.');
+  return uri;
+}
+
+
+async function analyzeWithGemini(source: FormData, updateStatus?: (status: string) => void | Promise<void>) {
+  const startedAt = Date.now();
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Gemini no está configurado en el servidor local.');
+  const providerHealth = await fetchControl('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', {
+    headers: { 'x-goog-api-key': apiKey }, cache: 'no-store',
+  }, 3, 8_000);
+  if (!providerHealth.ok) throw new Error(`Gemini no está disponible en este momento (${providerHealth.status}). El video preparado se conserva para reintentar.`);
+  const video = source.get('video');
+  const stagedVideoId = field(source, 'staged_video_id');
+  const hasStagedVideo = /^[a-f0-9-]{16,64}$/i.test(stagedVideoId);
+  if (!hasStagedVideo && (!(video instanceof File) || !video.size)) throw new Error('No se recibió un video válido.');
+
+  const inputPath = hasStagedVideo
+    ? join(tmpdir(), `fight-ai-staged-${stagedVideoId}.mp4`)
+    : join(tmpdir(), `fight-ai-local-source-${randomUUID()}.mp4`);
+  const clipPath = join(tmpdir(), `fight-ai-local-round-${randomUUID()}.mp4`);
+  const markedReferencePath = join(tmpdir(), `fight-ai-anchor-marked-${randomUUID()}.jpg`);
+  const croppedReferencePath = join(tmpdir(), `fight-ai-anchor-crop-${randomUUID()}.jpg`);
+  const evidenceReferencePaths: string[] = [];
+  const videoName = hasStagedVideo ? field(source, 'video_name', 'fight-ai-sparring.mp4') : (video as File).name || 'fight-ai-sparring.mp4';
+  let originalSize = hasStagedVideo ? Number(field(source, 'video_size', '0')) || 0 : (video as File).size;
+  let preprocessingMs = 0;
+  let uploadMs = 0;
+  let processingMs = 0;
+
+  try {
+    await updateStatus?.('preprocessing');
+    const preprocessingStarted = Date.now();
+    if (hasStagedVideo) {
+      const staged = await stat(inputPath);
+      if (!staged.size || staged.size > 750 * 1024 * 1024) throw new Error('El video preparado no es válido o expiró. Genera nuevamente el frame compatible.');
+      originalSize = staged.size;
+    } else {
+      const uploadedVideo = video as File;
+      await pipeline(
+        Readable.fromWeb(uploadedVideo.stream() as import('stream/web').ReadableStream),
+        createWriteStream(inputPath, { flags: 'wx' }),
+      );
+    }
+    await makeThreeMinuteClip(inputPath, clipPath);
+    let clip = await stat(clipPath);
+    if (!clip.size) throw new Error('El clip local de 3 minutos quedó vacío.');
+
+    // Keep stream-copy as the fast path. Only large/high-bitrate phone videos
+    // are compacted once on the user's PC before Gemini sees them.
+    if (clip.size > 45 * 1024 * 1024) {
+      await unlink(clipPath).catch(() => undefined);
+      await makeCompactCompatibleClip(inputPath, clipPath);
+      clip = await stat(clipPath);
+      if (!clip.size) throw new Error('El clip compatible local quedó vacío.');
+    }
+
+    const identityContext = targetContext(source);
+    const anchorX = Number(identityContext.anchorX);
+    const anchorY = Number(identityContext.anchorY);
+    const anchorTime = Number(identityContext.anchorTime);
+    const hasVisualAnchor = Number.isFinite(anchorX) && Number.isFinite(anchorY) && Number.isFinite(anchorTime)
+      && identityContext.anchorX !== '' && identityContext.anchorY !== ''
+      && anchorX >= 0 && anchorX <= 100 && anchorY >= 0 && anchorY <= 100;
+    if (!hasVisualAnchor) throw new Error('Falta una marca visual válida del peleador. Vuelve a marcarlo antes de analizar.');
+
+    const normalizedX = anchorX / 100;
+    const normalizedY = anchorY / 100;
+    const anchorScale = Math.max(.12, Math.min(.48, Number(identityContext.anchorSize || 24) / 100));
+    const cropWidth = Math.max(.30, Math.min(.46, anchorScale * 1.65));
+    const cropHeight = Math.max(.68, Math.min(.92, cropWidth * 1.9));
+    const cropLeft = Math.max(0, Math.min(1 - cropWidth, normalizedX - cropWidth / 2));
+    const cropTop = Math.max(0, Math.min(1 - cropHeight, normalizedY - cropHeight / 2));
+    const markedFilter = `drawbox=x=iw*${cropLeft.toFixed(5)}:y=ih*${cropTop.toFixed(5)}:w=iw*${cropWidth.toFixed(5)}:h=ih*${cropHeight.toFixed(5)}:color=0xd7a84a@0.95:t=8,scale=-2:720`;
+    const croppedFilter = `crop=iw*${cropWidth.toFixed(5)}:ih*${cropHeight.toFixed(5)}:iw*${cropLeft.toFixed(5)}:ih*${cropTop.toFixed(5)},scale=-2:720`;
+    await makeAnchorReferenceImage(inputPath, markedReferencePath, anchorTime, markedFilter);
+    await makeAnchorReferenceImage(inputPath, croppedReferencePath, anchorTime, croppedFilter);
+    preprocessingMs = Date.now() - preprocessingStarted;
+
+    const mimeType = 'video/mp4';
+    await updateStatus?.('uploading');
+    const uploadStarted = Date.now();
+    const startUpload = await fetchControl('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+        method: 'POST',
+        headers: {
+          'x-goog-api-key': apiKey,
+          'X-Goog-Upload-Protocol': 'resumable',
+          'X-Goog-Upload-Command': 'start',
+          'X-Goog-Upload-Header-Content-Length': String(clip.size),
+          'X-Goog-Upload-Header-Content-Type': mimeType,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ file: { display_name: `local-3min-${videoName}`.slice(0, 160) } }),
+        cache: 'no-store',
+    }, 3, 20_000);
+    if (!startUpload.ok) throw new Error(`Gemini no pudo iniciar la carga local (${startUpload.status}).`);
+    const uploadUrl = startUpload.headers.get('x-goog-upload-url');
+    if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga.');
+
+    const body = Readable.toWeb(createReadStream(clipPath) as Readable);
+    const uploaded = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Length': String(clip.size),
+        'X-Goog-Upload-Offset': '0',
+        'X-Goog-Upload-Command': 'upload, finalize',
+      },
+      body,
+      cache: 'no-store',
+      signal: AbortSignal.timeout(4 * 60_000),
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    if (!uploaded.ok) throw new Error(`Gemini no pudo cargar el clip local (${uploaded.status}).`);
+    uploadMs = Date.now() - uploadStarted;
+
+    const fileInfo = await uploaded.json() as { file?: { name?: string; uri?: string; state?: string } };
+    const fileName = fileInfo.file?.name; const fileUri = fileInfo.file?.uri;
+    if (!fileName || !fileUri) throw new Error('Gemini no devolvió referencia del video.');
+
+    await updateStatus?.('preparing');
+    const processingStarted = Date.now();
+    let state = fileInfo.file?.state || 'PROCESSING';
+    const deadline = Date.now() + 8 * 60_000;
+    while (state !== 'ACTIVE' && Date.now() < deadline) {
+      if (state === 'FAILED') throw new Error('Gemini no pudo preparar el video.');
+      await sleep(1800);
+      const status = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}`, {
+        headers: { 'x-goog-api-key': apiKey },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!status.ok) throw new Error(`No se pudo consultar el estado del video en Gemini (${status.status}).`);
+      state = (await status.json() as { state?: string }).state || 'PROCESSING';
+    }
+    if (state !== 'ACTIVE') throw new Error('Gemini tardó demasiado en preparar el video.');
+    const anchorReferenceUris = await Promise.all([
+      uploadAnchorReference(apiKey, markedReferencePath, `fight-ai-target-marked-${videoName}`.slice(0, 160)),
+      uploadAnchorReference(apiKey, croppedReferencePath, `fight-ai-target-crop-${videoName}`.slice(0, 160)),
+    ]);
+    processingMs = Date.now() - processingStarted;
+
+    const language = field(source, 'language', 'es');
+    const sport = field(source, 'sport', 'boxing');
+    const stance = field(source, 'stance', 'unknown');
+    const descriptors = [
+      field(source,'glove_color') && `guantes/diseño ${field(source,'glove_color')}`,
+      field(source,'top_color') && `ropa ${field(source,'top_color')}`,
+      field(source,'relative_height') && `altura relativa ${field(source,'relative_height')}`,
+      field(source,'build') && `contextura ${field(source,'build')}`,
+      field(source,'fighter_notes'),
+    ].filter(Boolean).join('; ');
+    const promptAnchorTime = Number(field(source,'anchor_time','0')) || 0;
+    const anchor = field(source,'anchor_x') && field(source,'anchor_y')
+      ? `El usuario marcó al peleador en t=${promptAnchorTime.toFixed(1)}s cerca de x=${field(source,'anchor_x')}%, y=${field(source,'anchor_y')}%. Usa ese momento como ancla visual y mantén la identidad por continuidad temporal.`
+      : 'Mantén la identidad usando las características visibles y continuidad temporal.';
+    const focuses = field(source,'analysis_focus','technique,weaknesses,strategy');
+    const customFocus = field(source,'custom_focus');
+    const languageInstruction = language === 'en' ? 'Write the entire report in English.' : 'Escribe todo el reporte en español natural.';
+    const knowledge = boxingKnowledgePrompt([focuses, customFocus, descriptors, stance, sport].join(' '), 6);
+
+    const prompt = `Actúa como un entrenador de boxeo/kickboxing de alto nivel haciendo una revisión clínica post-sparring. ${languageInstruction}
+
+MOTOR HÍBRIDO FIGHT AI:
+${knowledge.text}
+
+La base acelera el razonamiento, pero NO decide el diagnóstico. Mira el video y acepta, modifica o descarta cada fundamento según este atleta, este rival y este momento. Cada conclusión final debe nacer de evidencia visible.
+
+VIDEO Y OBJETIVO:
+- Disciplina: ${sport}.
+- Guardia declarada del atleta: ${stance}.
+- Peleador objetivo: ${descriptors || 'peleador seleccionado por el usuario'}.
+- ${anchor}
+- ${identityInstruction(targetContext(source))}
+- Si la identidad se vuelve dudosa, NO cambies de peleador silenciosamente: usa solo momentos en que estés seguro.
+
+FOCO PEDIDO POR EL ATLETA:
+- Áreas: ${focuses}.
+- Objetivo personalizado: ${customFocus || 'ninguno adicional'}.
+
+ESTÁNDAR DE COACHING:
+1. No hagas comentarios genéricos. Busca patrones repetidos y explica el contexto exacto.
+2. Para cada prioridad conecta QUÉ sucede visualmente → POR QUÉ probablemente sucede → consecuencia técnica/táctica → CÓMO corregirlo.
+3. Distingue hechos visibles de hipótesis. No inventes conteos, porcentajes, velocidad, precisión ni estadísticas.
+4. Revisa guardia/recuperación, base/balance, transferencia de peso, entradas, salidas, head movement, defensa tras combinación, distancia, timing, ángulos/pivotes, footwork, selección de golpes, ritmo, presión, reacción al jab, cuerpo y decisiones bajo presión cuando sean visibles.
+5. Lee al rival: rango preferido, reacciones recurrentes, patrones, qué explota del atleta y qué vulnerabilidades ofrece.
+6. Prioriza SOLO las 3 correcciones con mayor impacto.
+7. Las fortalezas deben explicar cómo explotarlas estratégicamente.
+8. Cada drill debe estar ligado a una prioridad concreta e incluir estructura práctica y objetivo.
+9. evidence debe usar timestamps MM:SS realmente visibles, distribuidos en el round; targetMatch solo es true cuando ese momento corresponde al atleta objetivo.
+10. summary debe ser un diagnóstico específico, no una plantilla ni una descripción de una escuela nacional.
+
+Devuelve exclusivamente JSON válido con targetIdentity, summary, strengths, priorities, opponent, plan, drills y evidence.`;
+
+    await updateStatus?.('coaching');
+    const analysisStarted = Date.now();
+    const parsed = await generateCoachJson(apiKey, prompt, fileUri, mimeType, anchorReferenceUris);
+    const draftEvidence = Array.isArray(parsed.evidence)
+      ? parsed.evidence.map(parseIdentityEvidence).filter((item): item is NonNullable<typeof item> => Boolean(item)).slice(0, 5)
+      : [];
+    if (!draftEvidence.length) throw new Error('Gemini no encontró evidencia verificable del peleador seleccionado.');
+
+    await updateStatus?.('verifying');
+    for (const item of draftEvidence) {
+      const seconds = clockToSeconds(item.time);
+      if (!Number.isFinite(seconds) || seconds < 0 || seconds > 180) continue;
+      const path = join(tmpdir(), `fight-ai-evidence-verify-${randomUUID()}.jpg`);
+      await makeAnchorReferenceImage(inputPath, path, seconds, 'scale=-2:720');
+      evidenceReferencePaths.push(path);
+    }
+    if (evidenceReferencePaths.length !== draftEvidence.length) throw new Error('No pudimos generar todos los frames de verificación del reporte.');
+    const evidenceReferenceUris = await Promise.all(evidenceReferencePaths.map((path, index) =>
+      uploadAnchorReference(apiKey, path, `fight-ai-evidence-${index + 1}-${videoName}`.slice(0, 160))));
+    const verificationPrompt = `Eres el verificador visual final de Fight AI. No confíes en las etiquetas de identidad del borrador: comprueba cada afirmación mirando las imágenes.
+
+Las dos primeras imágenes definen al atleta objetivo. Las imágenes EVIDENCIA 1..N corresponden, en el mismo orden, a estos elementos del borrador:
+${JSON.stringify(draftEvidence)}
+
+Borrador completo:
+${JSON.stringify(parsed)}
+
+Reglas obligatorias:
+1. Distingue explícitamente quién está en las cuerdas, quién avanza y quién golpea en cada imagen.
+2. Nunca atribuyas al atleta objetivo la postura o acción del rival. Los guantes, casco, ropa y continuidad con las referencias mandan sobre el texto del borrador.
+3. Si un elemento intercambia los sujetos, reescribe title, observation y correction para describir únicamente lo que hace o recibe el atleta objetivo en ese frame. Si el objetivo no es visible con certeza, omite el elemento.
+4. Cada evidence devuelto debe conservar su timestamp, tener targetMatch=true e identityBasis debe citar rasgos realmente visibles del objetivo y su posición/acción en ese frame.
+5. Reescribe summary, strengths, priorities, opponent, plan y drills para que sean coherentes exclusivamente con las evidencias corregidas. No mantengas conclusiones contaminadas por el rival.
+6. Devuelve exclusivamente JSON válido con el mismo esquema del borrador.`;
+    const verified = await verifyCoachJson(apiKey, verificationPrompt, anchorReferenceUris, evidenceReferenceUris);
+    const analysisMs = Date.now() - analysisStarted;
+    const targetIdentity = parseTargetIdentity(verified.targetIdentity, targetContext(source));
+    if (!targetIdentity) throw new Error('No pudimos confirmar que el análisis siguiera al peleador seleccionado. Ajusta el círculo o agrega rasgos visibles y reintenta.');
+    const stringList = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.trim()) as string[] : [];
+    const evidence = Array.isArray(verified.evidence) ? verified.evidence.map(parseIdentityEvidence).filter((item): item is NonNullable<typeof item> => Boolean(item)) : [];
+    if (!evidence.length) throw new Error('El verificador no pudo confirmar ninguna evidencia del peleador seleccionado. El reporte fue bloqueado.');
+
+    return {
+      mode: 'real' as const,
+      provider: 'Gemini',
+      usedInReport: true,
+      targetIdentity,
+      summary: typeof verified.summary === 'string' ? verified.summary : 'Análisis completado y verificado visualmente con Gemini.',
+      strengths: stringList(verified.strengths),
+      priorities: stringList(verified.priorities).slice(0,3),
+      opponent: stringList(verified.opponent),
+      plan: stringList(verified.plan),
+      drills: stringList(verified.drills),
+      evidence,
+      timings: {
+        preprocessing_ms: preprocessingMs,
+        gemini_upload_ms: uploadMs,
+        gemini_processing_ms: processingMs,
+        analysis_ms: analysisMs,
+        total_ms: Date.now() - startedAt,
+        original_size_bytes: originalSize,
+        processed_size_bytes: clip.size,
+        clip_count: 1,
+      },
+      knowledge: { version: knowledge.version, matched: knowledge.ids },
+    };
+  } finally {
+    await Promise.all([
+      // A staged source is reused after coaching to render the report's real
+      // evidence thumbnails. It is cleaned when the user replaces the video
+      // or the preview session is explicitly deleted.
+      hasStagedVideo ? Promise.resolve() : unlink(inputPath).catch(() => undefined),
+      unlink(clipPath).catch(() => undefined),
+      unlink(markedReferencePath).catch(() => undefined),
+      unlink(croppedReferencePath).catch(() => undefined),
+      ...evidenceReferencePaths.map(path => unlink(path).catch(() => undefined)),
+    ]);
+  }
+}
+
+
+type LocalJob = {
+  id: string;
+  status: 'queued' | 'preprocessing' | 'uploading' | 'preparing' | 'coaching' | 'verifying' | 'complete' | 'failed';
+  updatedAt: number;
+  report?: unknown;
+  error?: string;
+  source?: Record<string, string>;
+};
+
+const localProcessStartedAt = Date.now();
+const resumingLocalJobs = new Set<string>();
+
+function localJobPath(id: string) {
+  return join(tmpdir(), `fight-ai-local-job-${id}.json`);
+}
+
+async function writeLocalJob(job: LocalJob) {
+  await writeFile(localJobPath(job.id), JSON.stringify(job), 'utf8');
+}
+
+async function readLocalJob(id: string): Promise<LocalJob | null> {
+  if (!/^[a-f0-9-]{16,64}$/i.test(id)) return null;
+  try {
+    return JSON.parse(await readFile(localJobPath(id), 'utf8')) as LocalJob;
+  } catch {
+    return null;
+  }
+}
+
+function localSourceRecord(source: FormData) {
+  const record: Record<string, string> = {};
+  for (const [key, value] of source.entries()) if (typeof value === 'string') record[key] = value;
+  return record;
+}
+
+function localSourceForm(record: Record<string, string>) {
+  const source = new FormData();
+  for (const [key, value] of Object.entries(record)) source.append(key, value);
+  return source;
+}
+
+async function prepareLocalAsyncSource(source: FormData) {
+  const prepared = new FormData();
+  for (const [key, value] of source.entries()) {
+    if (key === 'video' || key === 'staged_video_id' || key === 'video_name' || key === 'video_size') continue;
+    if (typeof value === 'string') prepared.append(key, value);
+  }
+
+  const existingStaged = field(source, 'staged_video_id');
+  if (/^[a-f0-9-]{16,64}$/i.test(existingStaged)) {
+    prepared.append('staged_video_id', existingStaged);
+    prepared.append('video_name', field(source, 'video_name', 'fight-ai-sparring.mp4'));
+    prepared.append('video_size', field(source, 'video_size', '0'));
+    return prepared;
+  }
+
+  const video = source.get('video');
+  if (!(video instanceof File) || !video.size) throw new Error('No se recibió un video válido.');
+  const stagedId = randomUUID();
+  const stagedPath = join(tmpdir(), `fight-ai-staged-${stagedId}.mp4`);
+  await pipeline(
+    Readable.fromWeb(video.stream() as import('stream/web').ReadableStream),
+    createWriteStream(stagedPath, { flags: 'wx' }),
+  );
+  prepared.append('staged_video_id', stagedId);
+  prepared.append('video_name', video.name || 'fight-ai-sparring.mp4');
+  prepared.append('video_size', String(video.size));
+  return prepared;
+}
+
+async function runLocalJob(id: string, source: FormData) {
+  const sourceRecord = localSourceRecord(source);
+  const update = async (status: LocalJob['status']) => {
+    await writeLocalJob({ id, status, updatedAt: Date.now(), source: sourceRecord });
+  };
+  try {
+    await update('preprocessing');
+    const report = await analyzeWithGemini(source, async (status) => {
+      if (['preprocessing','uploading','preparing','coaching','verifying'].includes(status)) {
+        await update(status as LocalJob['status']);
+      }
+    });
+    await writeLocalJob({ id, status: 'complete', updatedAt: Date.now(), report, source: sourceRecord });
+  } catch (error) {
+    console.error('Fight AI local async analysis error', error);
+    await writeLocalJob({
+      id,
+      status: 'failed',
+      updatedAt: Date.now(),
+      error: error instanceof Error ? error.message : 'No se pudo completar el análisis.',
+      source: sourceRecord,
+    });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const id = new URL(req.url).searchParams.get('id') || '';
+  let job = await readLocalJob(id);
+  if (!job) return NextResponse.json({ error: 'El trabajo local no existe o ya expiró.' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+  const active = ['queued','preprocessing','uploading','preparing','coaching','verifying'].includes(job.status);
+  if (active && job.updatedAt < localProcessStartedAt - 1_000) {
+    if (job.source && !resumingLocalJobs.has(id)) {
+      resumingLocalJobs.add(id);
+      void runLocalJob(id, localSourceForm(job.source)).finally(() => resumingLocalJobs.delete(id));
+      job = { ...job, status: 'queued', updatedAt: Date.now() };
+    } else if (!job.source) {
+      job = {
+        ...job,
+        status: 'failed',
+        updatedAt: Date.now(),
+        error: 'El servidor se reinició durante este análisis antiguo. Pulsa ANALIZAR SPARRING otra vez: el video preparado sigue en este PC y no volverá a cargarse.',
+      };
+      await writeLocalJob(job);
+    }
+  }
+  if (job.status === 'complete') return NextResponse.json({ status: job.status, report: job.report, updatedAt: job.updatedAt }, { headers: { 'Cache-Control': 'no-store' } });
+  if (job.status === 'failed') return NextResponse.json({ status: job.status, error: job.error, updatedAt: job.updatedAt }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json({ status: job.status, updatedAt: job.updatedAt }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const source = await req.formData();
+    const localMode = (process.env.FIGHT_AI_RUNTIME || 'cloud').trim().toLowerCase() === 'local';
+    const backend = localMode ? '' : process.env.FIGHT_AI_API_URL?.replace(/\/$/, '');
+
+    if (localMode && new URL(req.url).searchParams.get('async') === '1') {
+      const prepared = await prepareLocalAsyncSource(source);
+      const id = randomUUID();
+      await writeLocalJob({ id, status: 'queued', updatedAt: Date.now(), source: localSourceRecord(prepared) });
+      void runLocalJob(id, prepared);
+      return NextResponse.json({ id, status: 'queued' }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+    }
+
+    if (!backend) return NextResponse.json(await analyzeWithGemini(source));
+    const health = await requestJson(`${backend}/health`) as { asyncJobs?: boolean };
+    if (health.asyncJobs) {
+      const created = await requestJson(`${backend}/jobs/analyze`, { method: 'POST', body: source }) as { jobId?: string };
+      if (!created.jobId) throw new Error('El motor no devolvió un jobId.');
+      const deadline = Date.now() + 25 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await sleep(2200);
+        const job = await requestJson(`${backend}/jobs/${encodeURIComponent(created.jobId)}`) as { status?: string; error?: string; result?: { report?: unknown } };
+        if (job.status === 'COMPLETED') { if (!job.result?.report) throw new Error('El análisis terminó sin reporte.'); return NextResponse.json(normalizeReport(job.result.report, source)); }
+        if (job.status === 'FAILED') throw new Error(job.error || 'El motor detuvo el análisis.');
+      }
+      throw new Error('El análisis superó el tiempo máximo de espera (25 min).');
+    }
+    const legacy = await requestJson(`${backend}/analyze`, { method: 'POST', body: source }) as { report?: unknown };
+    if (!legacy.report) throw new Error('El motor no devolvió reporte.');
+    return NextResponse.json(normalizeReport(legacy.report, source));
+  } catch (error) {
+    console.error('Fight AI web analysis error', error);
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'No se pudo completar el análisis.' }, { status: 502 });
+  }
+}
