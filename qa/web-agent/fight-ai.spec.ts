@@ -300,6 +300,34 @@ test('a stale local verification stops instead of polling indefinitely', async (
   await expect(page.getByTestId('processing-state')).toHaveCount(0);
 });
 
+test('a stale Gemini coaching phase stops instead of waiting 16 minutes', async ({ page }) => {
+  await page.route('**/api/health', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ localMode: true, geminiConfigured: true, analysisReady: true }),
+  }));
+  await page.route('**/api/preview-frame**', route => {
+    if (route.request().method() === 'DELETE') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ deleted: true }) });
+    return route.fulfill({
+      status: 200,
+      contentType: 'image/jpeg',
+      headers: { 'x-fight-ai-staged-video': '12345678-1234-1234-1234-123456789abc' },
+      body: Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EH//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EH//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EH//2Q==', 'base64'),
+    });
+  });
+  await page.route('**/api/upload**', route => route.fulfill({ status: 200, headers: { 'x-fight-ai-staged-video': '12345678-1234-1234-1234-123456789abc' } }));
+  await page.route('**/api/analyze**', route => {
+    if (route.request().method() === 'POST') return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'stale-coaching' }) });
+    return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ status: 'coaching', updatedAt: Date.now() - 5 * 60 * 1000 }) });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('video-input').setInputFiles(realVideo());
+  await markVisibleFighter(page);
+  await page.getByTestId('glove-color').fill('rojos');
+  await page.getByTestId('analyze-button').click();
+  await expect(page.locator('.error[role="alert"]')).toContainText('Gemini no respondió dentro del límite', { timeout: 10_000 });
+  await expect(page.getByTestId('processing-state')).toHaveCount(0);
+});
+
 test('virtual athlete can identify fighter choose coach focus submit analysis and replay uploaded evidence', async ({ page }) => {
   await page.route('**/api/health', route => route.fulfill({
     status: 200,

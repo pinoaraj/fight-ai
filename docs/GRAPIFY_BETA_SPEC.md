@@ -280,6 +280,10 @@ The corrected exact-video run took 146.9 seconds and removed the invalid 00:26 f
 
 Every new local asynchronous job persists the staged-video identifier plus its analysis context in the job record. A GET after a Node/server restart detects active records older than the current process and resumes them from the staged MP4. Legacy records without context transition to an explicit retryable failure instead of polling indefinitely. The image-only verifier has a 135-second global deadline and one bounded attempt per fallback model; it can no longer accumulate an 18-minute nested retry window.
 
+### Bounded provider availability — 2026-09-09
+
+Local analysis preflights Gemini before FFmpeg work and retries transient DNS/control failures. The coaching request may use up to 200 seconds because the exact three-minute HEVC regression normally requires roughly 140–150 seconds. Client polling has an eight-minute overall ceiling plus four-minute stale-phase guards for coaching and identity verification. On provider high demand the job fails explicitly and preserves the staged source for a no-reupload retry; external Gemini capacity must never be presented as a completed analysis.
+
 
 ## Checkpoint 2026-09-01 — Gemini Files capacity fallback
 

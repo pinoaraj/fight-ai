@@ -15,6 +15,24 @@ export const dynamic = 'force-dynamic';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+async function fetchControl(url: string, init: RequestInit, attempts = 3, timeoutMs = 20_000) {
+  const { signal: _ignoredSignal, ...retryableInit } = init;
+  let lastResponse: Response | undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetch(url, { ...retryableInit, signal: AbortSignal.timeout(timeoutMs) });
+      lastResponse = response;
+      if (response.ok || ![429,500,502,503,504].includes(response.status)) return response;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt + 1 < attempts) await sleep(1500 * (attempt + 1));
+  }
+  if (lastResponse) return lastResponse;
+  throw new Error('No se pudo contactar a Gemini después de varios intentos. Revisa la conexión o DNS y reintenta; el video preparado se conserva.', { cause: lastError });
+}
+
 function secondsToClock(value: number) {
   const total = Math.max(0, Math.round(value));
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
@@ -110,7 +128,10 @@ function interactionOutputText(raw: unknown) {
 async function generateCoachJson(apiKey: string, prompt: string, fileUri: string, mimeType: string, anchorReferenceUris: string[] = []) {
   const configured = process.env.GEMINI_MODEL?.trim();
   const candidates = Array.from(new Set([configured || '', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].filter(Boolean)));
-  const deadline = Date.now() + 180_000;
+  // This three-minute video regularly needs about 140-150 seconds on Gemini.
+  // Keep one useful request alive instead of aborting it at 90 seconds and
+  // spending the remaining budget on a second model that cannot finish.
+  const deadline = Date.now() + 210_000;
   let lastStatus = 0;
   for (const model of candidates) {
     const remaining = deadline - Date.now();
@@ -132,10 +153,13 @@ async function generateCoachJson(apiKey: string, prompt: string, fileUri: string
             response_format: { type: 'text', mime_type: 'application/json', schema: coachingSchema },
             store: false,
           }), cache: 'no-store',
-          signal: AbortSignal.timeout(Math.min(90_000, remaining)),
-      });
-    } catch {
+          signal: AbortSignal.timeout(Math.min(200_000, remaining)),
+        });
+    } catch (error) {
       lastStatus = 0;
+      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+        throw new Error('Gemini superó el límite de 3 minutos y 20 segundos para generar el análisis. El video sigue preparado para reintentar.');
+      }
       continue;
     }
     lastStatus = response.status;
@@ -277,9 +301,7 @@ function makeAnchorReferenceImage(inputPath: string, outputPath: string, atSecon
 
 async function uploadAnchorReference(apiKey: string, path: string, displayName: string) {
   const info = await stat(path);
-  let startUpload: Response | undefined;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    startUpload = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+  const startUpload = await fetchControl('https://generativelanguage.googleapis.com/upload/v1beta/files', {
       method: 'POST',
       headers: {
         'x-goog-api-key': apiKey,
@@ -291,12 +313,8 @@ async function uploadAnchorReference(apiKey: string, path: string, displayName: 
       },
       body: JSON.stringify({ file: { display_name: displayName } }),
       cache: 'no-store',
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (startUpload.ok || ![429,500,502,503,504].includes(startUpload.status)) break;
-    if (attempt < 2) await sleep(2500 * (attempt + 1));
-  }
-  if (!startUpload?.ok) throw new Error(`Gemini no pudo recibir la referencia visual (${startUpload?.status || 0}).`);
+  }, 3, 20_000);
+  if (!startUpload.ok) throw new Error(`Gemini no pudo recibir la referencia visual (${startUpload.status}).`);
   const uploadUrl = startUpload.headers.get('x-goog-upload-url');
   if (!uploadUrl) throw new Error('Gemini no devolvió URL para la referencia visual.');
   const uploaded = await fetch(uploadUrl, {
@@ -332,6 +350,10 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
   const startedAt = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini no está configurado en el servidor local.');
+  const providerHealth = await fetchControl('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', {
+    headers: { 'x-goog-api-key': apiKey }, cache: 'no-store',
+  }, 3, 8_000);
+  if (!providerHealth.ok) throw new Error(`Gemini no está disponible en este momento (${providerHealth.status}). El video preparado se conserva para reintentar.`);
   const video = source.get('video');
   const stagedVideoId = field(source, 'staged_video_id');
   const hasStagedVideo = /^[a-f0-9-]{16,64}$/i.test(stagedVideoId);
@@ -402,9 +424,7 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
     const mimeType = 'video/mp4';
     await updateStatus?.('uploading');
     const uploadStarted = Date.now();
-    let startUpload: Response | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      startUpload = await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+    const startUpload = await fetchControl('https://generativelanguage.googleapis.com/upload/v1beta/files', {
         method: 'POST',
         headers: {
           'x-goog-api-key': apiKey,
@@ -416,13 +436,8 @@ async function analyzeWithGemini(source: FormData, updateStatus?: (status: strin
         },
         body: JSON.stringify({ file: { display_name: `local-3min-${videoName}`.slice(0, 160) } }),
         cache: 'no-store',
-        signal: AbortSignal.timeout(45_000),
-      });
-      if (startUpload.ok) break;
-      if (![429,500,502,503,504].includes(startUpload.status)) break;
-      if (attempt < 2) await sleep(5000 * (attempt + 1));
-    }
-    if (!startUpload?.ok) throw new Error(`Gemini no pudo iniciar la carga local (${startUpload?.status || 0}).`);
+    }, 3, 20_000);
+    if (!startUpload.ok) throw new Error(`Gemini no pudo iniciar la carga local (${startUpload.status}).`);
     const uploadUrl = startUpload.headers.get('x-goog-upload-url');
     if (!uploadUrl) throw new Error('Gemini no devolvió URL de carga.');
 

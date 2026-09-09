@@ -78,6 +78,7 @@ Controlled beta is approved; broad public launch is not. Continue real-device HE
 - The hybrid catalog is versioned as `2026.09.07-v1`; see `docs/BOXING_PROGRAM_CATALOG.md`.
 - The site header and `Fight AI Beta.lnk` use the branded `FIGHT AI` glove/reticle logo.
 - Current local gate (2026-09-09): TypeScript PASS, production build PASS, Playwright desktop/mobile virtual agents 18 passed and 2 device-specific skips. New local jobs persist staged-video context for restart recovery; legacy orphan jobs fail explicitly, and the browser stops a stale visual-verification phase after four minutes.
+- Provider-capacity follow-up (2026-09-09): Gemini control requests retry transient DNS/network failures and run a preflight before video conversion. Coaching allows one useful request up to 200 seconds, but the browser stops a stale coaching/verifying phase after four minutes and caps the local journey at eight minutes instead of 25. Final QA: 20 passed, 2 device-specific skips. The exact source remains staged locally; the last real provider check was blocked because all tested Gemini 3 video models reported high demand, so do not claim a fresh end-to-end report until a later retry completes.
 
 
 ## Continuity checkpoint — 2026-09-01

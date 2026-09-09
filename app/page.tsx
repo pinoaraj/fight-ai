@@ -411,7 +411,7 @@ export default function Home() {
     if (!started.ok) throw new Error(startData?.error || `No se pudo iniciar el análisis (HTTP ${started.status}).`);
     if (!startData?.id) throw new Error('El servidor local no devolvió un jobId.');
 
-    const deadline = Date.now() + 25 * 60 * 1000;
+    const deadline = Date.now() + 8 * 60 * 1000;
     while (Date.now() < deadline) {
       await new Promise(resolve => window.setTimeout(resolve, 2500));
       let response: Response;
@@ -434,11 +434,14 @@ export default function Home() {
       else setStageFloor(1);
 
       const jobAgeMs = typeof data?.updatedAt === 'number' ? Date.now() - data.updatedAt : 0;
+      if (data?.status === 'coaching' && jobAgeMs > 4 * 60 * 1000) {
+        throw new Error('Gemini no respondió dentro del límite de esta prueba. El video preparado sigue en este PC: pulsa ANALIZAR SPARRING para reintentar sin volver a subirlo.');
+      }
       if (data?.status === 'verifying' && jobAgeMs > 4 * 60 * 1000) {
         throw new Error('La verificación visual dejó de avanzar. El video preparado sigue en este PC: pulsa ANALIZAR SPARRING para recuperarlo sin volver a subirlo.');
       }
     }
-    throw new Error('El análisis superó 25 minutos. El servidor local dejó el job registrado para diagnóstico.');
+    throw new Error('El análisis superó 8 minutos. El video preparado sigue en este PC y puede reintentarse sin volver a subirlo.');
   }
 
   async function requestUploadedAnalysis(session: UploadedAnalysisSession) {
