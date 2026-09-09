@@ -37,7 +37,7 @@ The hybrid engine now includes the versioned catalog `2026.09.07-v1` with eight 
 ## Branding and launcher
 
 - Website header: branded gold/black glove-and-reticle `FIGHT AI` logo, enlarged to 72 px on desktop and 56 px on mobile with increased header spacing and wordmark legibility.
-- Desktop: `C:\Users\JP\Desktop\Fight AI Beta.lnk` with branded icon and name. The shortcut now points to the versioned `FightAI-Beta-v3.ico`, containing ten Windows Shell sizes from 16 to 256 px. Installation recreates the `.lnk` and forces a Shell association refresh. A direct `SHGetFileInfo` probe confirmed that Windows resolves the shortcut to the Fight AI logo rather than the generic `.cmd` icon.
+- Desktop: `C:\Users\JP\Desktop\Fight AI Beta.lnk` with branded icon and name. The shortcut now points to the versioned `FightAI-Beta-v4.ico`, containing ten Windows Shell sizes from 16 to 256 px. Installation recreates the `.lnk`, clears Explorer's icon cache with `ie4uinit`, and sends both item-specific and association refresh notifications. A direct Windows associated-icon probe confirmed that the shortcut resolves to the Fight AI logo rather than the generic `.cmd` icon.
 - Daily launcher: `ABRIR_FIGHT_AI.cmd`.
 - PC URL: `http://localhost:8787`.
 - LAN URL used for phone testing: `http://192.168.4.81:8787` (the PC and phone must be on the same network; the LAN IP can change after reconnecting).

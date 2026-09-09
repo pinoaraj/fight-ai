@@ -62,7 +62,7 @@ function New-FightAiIcon([string]$Path) {
 
 $IconDirectory = Join-Path $env:LOCALAPPDATA 'FightAI'
 New-Item -ItemType Directory -Path $IconDirectory -Force | Out-Null
-$IconPath = Join-Path $IconDirectory 'FightAI-Beta-v3.ico'
+$IconPath = Join-Path $IconDirectory 'FightAI-Beta-v4.ico'
 try {
   $SourceIcon = Join-Path $Root 'assets\desktop\fight-ai-icon.png'
   if (Test-Path $SourceIcon) {
@@ -135,17 +135,26 @@ $Shortcut.WindowStyle = 1
 $Shortcut.IconLocation = if ($IconPath -like '*.ico') { "$IconPath,0" } else { "$IconPath,220" }
 $Shortcut.Save()
 
-# Refresh Explorer after switching to the versioned icon path.
+# Refresh Explorer after switching to the versioned icon path. Clearing the
+# cache avoids the blank-page glyph Explorer can retain even when Windows
+# already resolves the custom icon through SHGetFileInfo.
 $refresh = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'
-if (Test-Path $refresh) { Start-Process -FilePath $refresh -ArgumentList '-show' -WindowStyle Hidden -Wait }
+if (Test-Path $refresh) {
+  Start-Process -FilePath $refresh -ArgumentList '-ClearIconCache' -WindowStyle Hidden -Wait
+  Start-Process -FilePath $refresh -ArgumentList '-show' -WindowStyle Hidden -Wait
+}
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class FightAIShellRefresh {
-  [DllImport("shell32.dll")]
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
   public static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
+
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+  public static extern void SHChangeNotify(uint eventId, uint flags, string item1, IntPtr item2);
 }
 '@
+[FightAIShellRefresh]::SHChangeNotify(0x00002000, 0x0005, $ShortcutPath, [IntPtr]::Zero)
 [FightAIShellRefresh]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
 
 Write-Host ''

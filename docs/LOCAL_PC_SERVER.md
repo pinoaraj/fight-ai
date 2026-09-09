@@ -42,7 +42,7 @@ Desde entonces, un doble clic en **Fight AI Beta** ejecuta `ABRIR_FIGHT_AI.cmd`.
 3. construye solamente cuando todavía no existe un build;
 4. abre `http://localhost:<puerto>` en el navegador.
 
-El acceso directo no detiene una instancia sana, no depende de Git/npm/red en cada apertura y conserva el icono versionado `FightAI-Beta-v3.ico` en `%LOCALAPPDATA%\FightAI`. El instalador crea un ICO PNG-compatible con diez resoluciones de 16 a 256 px, borra y recrea el `.lnk`, asigna la ruta nueva y notifica a Windows Shell para evitar el icono genérico blanco. `TODO_FIGHT_AI.bat` queda como operación explícita para actualizar, reconstruir y crear un enlace externo; no es el inicio diario.
+El acceso directo no detiene una instancia sana, no depende de Git/npm/red en cada apertura y conserva el icono versionado `FightAI-Beta-v4.ico` en `%LOCALAPPDATA%\FightAI`. El instalador crea un ICO PNG-compatible con diez resoluciones de 16 a 256 px, borra y recrea el `.lnk`, limpia la caché visual con `ie4uinit` y notifica específicamente a Windows Shell para evitar el icono genérico blanco. `TODO_FIGHT_AI.bat` queda como operación explícita para actualizar, reconstruir y crear un enlace externo; no es el inicio diario.
 
 El enlace `trycloudflare.com` es temporal y normalmente cambia al reiniciar el túnel.
 
